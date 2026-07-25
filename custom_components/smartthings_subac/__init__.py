@@ -349,6 +349,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: SubAcConfigEntry) -> boo
 
         try:
             context = await _get_local_ssl_context()
+            # 기기는 콜백을 TLS 로 보내므로 리스너도 TLS 서버여야 한다.
+            server_context = await hass.async_add_executor_job(
+                local_api.build_server_ssl_context, local_api.cert_path()
+            )
         except Exception as err:
             return {"success": False, "error": f"인증서 로드 실패: {err}"}
 
@@ -356,6 +360,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: SubAcConfigEntry) -> boo
             result = await local_api.request_token(
                 context,
                 host,
+                server_context=server_context,
                 port=port,
                 callback_host=callback_host,
                 callback_port=call.data[ATTR_CALLBACK_PORT],

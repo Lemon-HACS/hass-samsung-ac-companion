@@ -63,6 +63,27 @@ def build_ssl_context(cert_path: str) -> ssl.SSLContext:
     return context
 
 
+def build_server_ssl_context(cert_path_: str) -> ssl.SSLContext:
+    """콜백 수신용 TLS 서버 컨텍스트 (blocking — executor 에서 호출할 것).
+
+    기기는 토큰 콜백을 **평문 HTTP 가 아니라 TLS 로** 보낸다 (실측: 리스너에
+    `\\x16\\x03\\x01` TLS 1.0 ClientHello 가 그대로 찍혔다). 그래서 콜백
+    리스너도 TLS 서버여야 하고, 기기가 TLS 1.0 만 쓰므로 여기서도 고정한다.
+    """
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+
+    # 클라이언트 쪽과 마찬가지로 load_cert_chain 보다 먼저.
+    context.set_ciphers("ALL:@SECLEVEL=0")
+    context.minimum_version = ssl.TLSVersion.TLSv1
+    context.maximum_version = ssl.TLSVersion.TLSv1
+
+    # 기기가 클라이언트 인증서를 보내더라도 검증하지 않는다.
+    context.verify_mode = ssl.CERT_NONE
+
+    context.load_cert_chain(cert_path_)
+    return context
+
+
 def cert_path() -> str:
     """통합에 동봉된 인증서 경로."""
     return str(Path(__file__).parent / CERT_FILENAME)
@@ -177,6 +198,7 @@ async def request_token(
     context: ssl.SSLContext,
     host: str,
     *,
+    server_context: ssl.SSLContext,
     port: int = DEFAULT_PORT,
     callback_host: str,
     callback_port: int = DEFAULT_CALLBACK_PORT,
@@ -207,7 +229,12 @@ async def request_token(
         finally:
             writer.close()
 
-    server = await asyncio.start_server(_on_callback, "0.0.0.0", callback_port)  # noqa: S104
+    server = await asyncio.start_server(
+        _on_callback,
+        "0.0.0.0",  # noqa: S104
+        callback_port,
+        ssl=server_context,
+    )
     try:
         status, _, body = await raw_request(
             context,
