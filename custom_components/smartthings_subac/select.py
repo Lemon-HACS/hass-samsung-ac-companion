@@ -72,16 +72,24 @@ class FanSpeedSelect(LocalAcEntity, SelectEntity):
         comode = LocalAcCoordinator.get_option(self.device, "Comode")
 
         if level == 0:
+            self.coordinator.apply_optimistic_option(
+                self._device_id, "Comode", "Nano"
+            )
+            self.coordinator.apply_optimistic_wind(self._device_id, "speedLevel", 0)
             await self.coordinator.async_send(
                 self._device_id, "mode", {"options": ["Comode_Nano"]}
             )
             return
 
         if comode == "Nano":
+            self.coordinator.apply_optimistic_option(
+                self._device_id, "Comode", "Off"
+            )
             await self.coordinator.async_send(
                 self._device_id, "mode", {"options": ["Comode_Off"]}
             )
 
+        self.coordinator.apply_optimistic_wind(self._device_id, "speedLevel", level)
         await self.coordinator.async_send(
             self._device_id, "wind", {"speedLevel": level}
         )

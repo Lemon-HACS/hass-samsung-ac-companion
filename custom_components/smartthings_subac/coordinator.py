@@ -6,19 +6,24 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import ssl
 from datetime import timedelta
 from typing import Any
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from . import local_api
 from .const import DEFAULT_LOCAL_SCAN_INTERVAL
 
 _LOGGER = logging.getLogger(__name__)
+
+# 명령을 보낸 뒤 기기가 반영할 때까지 기다리는 시간(초).
+# 이보다 빨리 읽으면 아직 옛 값이 돌아와 낙관적 반영이 지워진다.
+COMMAND_SETTLE_SECONDS = 2.0
 
 
 class LocalAcCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
@@ -103,8 +108,49 @@ class LocalAcCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         if not 200 <= status < 300:
             raise RuntimeError(f"명령 실패 ({status}): {body.strip()}")
 
-        # 기기가 값을 보정하거나 무시할 수 있으므로 실제 상태를 다시 읽는다.
+        # 기기가 값을 보정하거나 아예 무시할 수 있으므로 실제 상태를 다시 읽는다.
+        # 다만 곧바로 읽으면 아직 반영 전이라 낙관적 값이 옛 값으로 덮어써진다.
+        # 기기가 반영할 시간을 준 뒤에 읽는다.
+        await asyncio.sleep(COMMAND_SETTLE_SECONDS)
         await self.async_request_refresh()
+
+    @callback
+    def apply_optimistic_option(
+        self, device_id: str, prefix: str, value: str
+    ) -> None:
+        """`Mode.options` 값을 즉시 바꿔치기하고 리스너를 깨운다.
+
+        명령을 보내도 기기 반영과 다음 폴링까지 시간이 걸려서, 그동안 UI 가
+        예전 상태로 되돌아간 것처럼 보인다. 낙관적으로 먼저 반영해 두고
+        실제 값은 뒤이은 refresh 가 덮어쓴다.
+        """
+        device = (self.data or {}).get(device_id)
+        if not device:
+            return
+        options = device.get("Mode", {}).get("options")
+        if options is None:
+            return
+
+        target = f"{prefix}_{value}"
+        for index, option in enumerate(options):
+            if option.startswith(f"{prefix}_"):
+                options[index] = target
+                break
+        else:
+            options.append(target)
+        self.async_update_listeners()
+
+    @callback
+    def apply_optimistic_wind(self, device_id: str, key: str, value: Any) -> None:
+        """`Wind` 값을 즉시 바꿔치기하고 리스너를 깨운다."""
+        device = (self.data or {}).get(device_id)
+        if not device:
+            return
+        wind = device.get("Wind")
+        if wind is None:
+            return
+        wind[key] = value
+        self.async_update_listeners()
 
     @staticmethod
     def get_option(device: dict[str, Any], prefix: str) -> str | None:

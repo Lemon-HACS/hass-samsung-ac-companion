@@ -109,8 +109,10 @@ class LocalAcSwitch(LocalAcEntity, SwitchEntity):
         await self._set(self.entity_description.off_value)
 
     async def _set(self, value: str) -> None:
+        prefix = self.entity_description.prefix
+        # 폴링을 기다리지 않고 UI 를 먼저 움직인다. 실제 값은 뒤이은
+        # refresh 가 덮어쓰므로, 기기가 명령을 거부해도 곧 제자리로 돌아온다.
+        self.coordinator.apply_optimistic_option(self._device_id, prefix, value)
         await self.coordinator.async_send(
-            self._device_id,
-            "mode",
-            {"options": [f"{self.entity_description.prefix}_{value}"]},
+            self._device_id, "mode", {"options": [f"{prefix}_{value}"]}
         )
