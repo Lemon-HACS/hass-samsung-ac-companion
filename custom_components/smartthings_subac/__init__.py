@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from dataclasses import dataclass, field
 from typing import Any
 
 import voluptuous as vol
@@ -32,6 +33,7 @@ from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 
 from . import local_api
+from .coordinator import LocalAcCoordinator
 from .const import (
     ATTR_ARGUMENTS,
     ATTR_BODY,
@@ -50,6 +52,9 @@ from .const import (
     ATTR_ST_DEVICE_ID,
     ATTR_TOKEN,
     ATTR_WAIT,
+    CONF_LOCAL_HOST,
+    CONF_LOCAL_PORT,
+    CONF_LOCAL_TOKEN,
     DOMAIN,
     SERVICE_API_GET,
     SERVICE_LOCAL_REQUEST,
@@ -63,9 +68,24 @@ _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS = [Platform.CLIMATE]
 
-# runtime_data 로 코어 SmartThings 의 config entry 를 들고 있는다.
-# 실제 데이터(client, devices)는 그쪽 entry.runtime_data 에 있다.
-type SubAcConfigEntry = ConfigEntry[ConfigEntry]
+# 로컬 API 가 설정되어 있을 때만 올리는 플랫폼.
+LOCAL_PLATFORMS = [Platform.SELECT, Platform.SENSOR, Platform.SWITCH]
+
+
+@dataclass
+class SubAcData:
+    """이 통합의 런타임 데이터.
+
+    `st_entry` 는 코어 SmartThings 의 config entry 다. 실제 클라이언트와
+    기기 목록은 그쪽 `runtime_data` 에 있다.
+    """
+
+    st_entry: ConfigEntry
+    local_coordinator: LocalAcCoordinator | None = None
+    platforms: list[Platform] = field(default_factory=list)
+
+
+type SubAcConfigEntry = ConfigEntry[SubAcData]
 
 PROBE_OCF_SCHEMA = vol.Schema(
     {
@@ -149,7 +169,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: SubAcConfigEntry) -> boo
             "SmartThings 통합이 아직 로드되지 않았습니다. 먼저 SmartThings를 설정하세요."
         )
 
-    entry.runtime_data = st_entry
+    data = SubAcData(st_entry=st_entry)
+    entry.runtime_data = data
 
     @callback
     def _reload_on_core_unload() -> None:
@@ -370,6 +391,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: SubAcConfigEntry) -> boo
             return {"success": False, "error": f"{type(err).__name__}: {err}"}
 
         result["success"] = "token" in result
+
+        # 발급에 성공하면 옵션에 바로 저장한다 (entry 리로드 → 엔티티 생성).
+        if token := result.get("token"):
+            hass.config_entries.async_update_entry(
+                entry,
+                options={
+                    **entry.options,
+                    CONF_LOCAL_HOST: host,
+                    CONF_LOCAL_PORT: port,
+                    CONF_LOCAL_TOKEN: token,
+                },
+            )
+            result["saved_to_options"] = True
+
         return result
 
     async def _local_request(call: ServiceCall) -> ServiceResponse:
@@ -425,8 +460,40 @@ async def async_setup_entry(hass: HomeAssistant, entry: SubAcConfigEntry) -> boo
         supports_response=SupportsResponse.ONLY,
     )
 
-    await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    # --- 로컬 API (선택) ---------------------------------------------------
+    # 무풍·미풍처럼 클라우드에 없는 기능은 기기와 직접 통신해야 한다.
+    # 옵션에 host/token 이 설정되어 있을 때만 활성화한다.
+    platforms = list(PLATFORMS)
+
+    local_host = entry.options.get(CONF_LOCAL_HOST)
+    local_token = entry.options.get(CONF_LOCAL_TOKEN)
+    if local_host and local_token:
+        coordinator = LocalAcCoordinator(
+            hass,
+            local_host,
+            local_token,
+            port=entry.options.get(CONF_LOCAL_PORT, local_api.DEFAULT_PORT),
+        )
+        try:
+            await coordinator.async_config_entry_first_refresh()
+        except Exception:  # noqa: BLE001 — 로컬이 안 되어도 코어 기능은 살린다
+            _LOGGER.exception(
+                "로컬 API 초기화 실패 — 무풍/풍량 엔티티 없이 계속합니다"
+            )
+        else:
+            data.local_coordinator = coordinator
+            platforms += LOCAL_PLATFORMS
+
+    entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
+
+    data.platforms = platforms
+    await hass.config_entries.async_forward_entry_setups(entry, platforms)
     return True
+
+
+async def _async_reload_entry(hass: HomeAssistant, entry: SubAcConfigEntry) -> None:
+    """옵션이 바뀌면 다시 올린다 (로컬 API 설정 반영)."""
+    await hass.config_entries.async_reload(entry.entry_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: SubAcConfigEntry) -> bool:
@@ -439,4 +506,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: SubAcConfigEntry) -> bo
         SERVICE_LOCAL_REQUEST,
     ):
         hass.services.async_remove(DOMAIN, service)
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+
+    return await hass.config_entries.async_unload_platforms(
+        entry, entry.runtime_data.platforms or PLATFORMS
+    )

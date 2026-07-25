@@ -53,7 +53,7 @@ async def async_setup_entry(
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
     """에어컨 capability 를 갖춘 서브 컴포넌트를 찾아 엔티티로 추가한다."""
-    st_data = entry.runtime_data.runtime_data
+    st_data = entry.runtime_data.st_entry.runtime_data
 
     entities: list[SubAirConditioner] = []
     for device in st_data.devices.values():

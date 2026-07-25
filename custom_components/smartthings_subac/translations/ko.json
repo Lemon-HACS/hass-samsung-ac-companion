@@ -10,5 +10,18 @@
       "single_instance_allowed": "이미 설정되어 있습니다.",
       "smartthings_not_configured": "먼저 SmartThings 통합을 설정해야 합니다."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "로컬 API 설정",
+        "description": "무풍·미풍처럼 SmartThings 클라우드로는 제어할 수 없는 기능을 위해, 에어컨과 직접 통신합니다.\n\n토큰은 `smartthings_subac.local_token` 서비스로 발급받으세요. 서비스를 실행한 뒤 에어컨 전원을 껐다 켜면 됩니다.\n\n비워두면 로컬 기능이 비활성화됩니다.",
+        "data": {
+          "local_host": "에어컨 IP",
+          "local_token": "토큰",
+          "local_port": "포트"
+        }
+      }
+    }
   }
 }

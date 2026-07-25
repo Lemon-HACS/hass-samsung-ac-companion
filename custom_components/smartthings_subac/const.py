@@ -29,6 +29,13 @@ SERVICE_LOCAL_REQUEST = "local_request"
 
 ATTR_HOST = "host"
 ATTR_PORT = "port"
+
+# config entry options 키
+CONF_LOCAL_HOST = "local_host"
+CONF_LOCAL_TOKEN = "local_token"
+CONF_LOCAL_PORT = "local_port"
+
+DEFAULT_LOCAL_SCAN_INTERVAL = 30
 ATTR_CALLBACK_HOST = "callback_host"
 ATTR_CALLBACK_PORT = "callback_port"
 ATTR_TOKEN = "token"

@@ -10,5 +10,18 @@
       "single_instance_allowed": "Already configured.",
       "smartthings_not_configured": "Set up the SmartThings integration first."
     }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Local API",
+        "description": "Talks to the air conditioner directly, for features the SmartThings cloud cannot control (WindFree, lowest fan speed).\n\nGet a token with the `smartthings_subac.local_token` service — run it, then power-cycle the unit.\n\nLeave empty to disable local features.",
+        "data": {
+          "local_host": "Air conditioner IP",
+          "local_token": "Token",
+          "local_port": "Port"
+        }
+      }
+    }
   }
 }
