@@ -86,6 +86,9 @@ API_GET_SCHEMA = vol.Schema(
         # 예) devices/{deviceId}/presentation
         vol.Required(ATTR_PATH): cv.string,
         vol.Optional(ATTR_PARAMS): dict,
+        vol.Optional("accept", default="application/json"): cv.string,
+        # 추가/덮어쓰기용 임의 헤더 (Authorization 은 항상 클라이언트 것 사용)
+        vol.Optional("headers"): dict,
     }
 )
 
@@ -259,7 +262,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: SubAcConfigEntry) -> boo
         try:
             await client.refresh_token()
             headers = {
-                "Accept": "application/json",
+                "Accept": call.data["accept"],
+                **(call.data.get("headers") or {}),
                 **client._get_headers(),  # noqa: SLF001 — Authorization 재사용
             }
             async with asyncio.timeout(30):
