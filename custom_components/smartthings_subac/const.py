@@ -21,6 +21,20 @@ SERVICE_API_GET = "api_get"
 ATTR_PATH = "path"
 ATTR_PARAMS = "params"
 
+# --- 로컬 API (포트 8888) ------------------------------------------------
+# SmartThings 클라우드를 거치지 않고 기기와 직접 통신한다.
+# 무풍처럼 클라우드 API 에 노출되지 않는 기능을 위한 경로.
+SERVICE_LOCAL_TOKEN = "local_token"
+SERVICE_LOCAL_REQUEST = "local_request"
+
+ATTR_HOST = "host"
+ATTR_PORT = "port"
+ATTR_CALLBACK_HOST = "callback_host"
+ATTR_CALLBACK_PORT = "callback_port"
+ATTR_TOKEN = "token"
+ATTR_METHOD = "method"
+ATTR_BODY = "body"
+
 ATTR_ST_DEVICE_ID = "st_device_id"
 ATTR_HREF = "href"
 ATTR_COMPONENT = "component"

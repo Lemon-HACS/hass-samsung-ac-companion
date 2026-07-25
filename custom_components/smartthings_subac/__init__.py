@@ -12,6 +12,7 @@ HA 코어의 SmartThings 통합은 에어컨 엔티티를 `main` 컴포넌트에
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import Any
 
@@ -30,19 +31,29 @@ from homeassistant.core import (
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 
+from . import local_api
 from .const import (
     ATTR_ARGUMENTS,
+    ATTR_BODY,
+    ATTR_CALLBACK_HOST,
+    ATTR_CALLBACK_PORT,
     ATTR_CAPABILITY,
     ATTR_COMMAND,
     ATTR_COMPONENT,
+    ATTR_HOST,
     ATTR_HREF,
     ATTR_INCLUDE_RAW,
+    ATTR_METHOD,
     ATTR_PARAMS,
     ATTR_PATH,
+    ATTR_PORT,
     ATTR_ST_DEVICE_ID,
+    ATTR_TOKEN,
     ATTR_WAIT,
     DOMAIN,
     SERVICE_API_GET,
+    SERVICE_LOCAL_REQUEST,
+    SERVICE_LOCAL_TOKEN,
     SERVICE_PROBE_OCF,
     SERVICE_SEND_COMMAND,
     ST_DOMAIN,
@@ -77,6 +88,32 @@ SEND_COMMAND_SCHEMA = vol.Schema(
         # 리스트 그대로 SmartThings 의 commands.arguments 로 전달된다.
         # execute 의 경우 ["mode/vs/0", {"x.com.samsung.da.options": [...]}] 형태.
         vol.Optional(ATTR_ARGUMENTS): list,
+    }
+)
+
+LOCAL_TOKEN_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_HOST): cv.string,
+        vol.Optional(ATTR_PORT, default=local_api.DEFAULT_PORT): cv.port,
+        # 생략하면 기기에 도달하는 이쪽 IP 를 자동으로 알아낸다.
+        vol.Optional(ATTR_CALLBACK_HOST): cv.string,
+        vol.Optional(
+            ATTR_CALLBACK_PORT, default=local_api.DEFAULT_CALLBACK_PORT
+        ): cv.port,
+        vol.Optional(ATTR_WAIT, default=90.0): vol.All(
+            vol.Coerce(float), vol.Range(min=10, max=300)
+        ),
+    }
+)
+
+LOCAL_REQUEST_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_HOST): cv.string,
+        vol.Required(ATTR_TOKEN): cv.string,
+        vol.Required(ATTR_PATH): cv.string,
+        vol.Optional(ATTR_PORT, default=local_api.DEFAULT_PORT): cv.port,
+        vol.Optional(ATTR_METHOD, default="GET"): cv.string,
+        vol.Optional(ATTR_BODY): cv.string,
     }
 )
 
@@ -292,13 +329,109 @@ async def async_setup_entry(hass: HomeAssistant, entry: SubAcConfigEntry) -> boo
         supports_response=SupportsResponse.ONLY,
     )
 
+    async def _get_local_ssl_context() -> Any:
+        """기기용 SSL 컨텍스트 (파일 I/O 라 executor 에서 만든다)."""
+        return await hass.async_add_executor_job(
+            local_api.build_ssl_context, local_api.cert_path()
+        )
+
+    async def _local_token(call: ServiceCall) -> ServiceResponse:
+        """로컬 API 토큰을 발급받는다.
+
+        이 서비스가 도는 동안 **에어컨 전원을 껐다 켜야** 기기가 토큰을 보낸다.
+        """
+        host: str = call.data[ATTR_HOST]
+        port: int = call.data[ATTR_PORT]
+
+        callback_host: str = call.data.get(ATTR_CALLBACK_HOST) or (
+            await hass.async_add_executor_job(local_api.detect_local_ip, host, port)
+        )
+
+        try:
+            context = await _get_local_ssl_context()
+        except Exception as err:
+            return {"success": False, "error": f"인증서 로드 실패: {err}"}
+
+        try:
+            result = await local_api.request_token(
+                context,
+                host,
+                port=port,
+                callback_host=callback_host,
+                callback_port=call.data[ATTR_CALLBACK_PORT],
+                wait=call.data[ATTR_WAIT],
+            )
+        except Exception as err:
+            return {"success": False, "error": f"{type(err).__name__}: {err}"}
+
+        result["success"] = "token" in result
+        return result
+
+    async def _local_request(call: ServiceCall) -> ServiceResponse:
+        """발급받은 토큰으로 로컬 API 를 호출한다."""
+        host: str = call.data[ATTR_HOST]
+        port: int = call.data[ATTR_PORT]
+        path: str = call.data[ATTR_PATH]
+        if not path.startswith("/"):
+            path = "/" + path
+
+        try:
+            context = await _get_local_ssl_context()
+        except Exception as err:
+            return {"success": False, "error": f"인증서 로드 실패: {err}"}
+
+        try:
+            status, headers, body = await local_api.raw_request(
+                context,
+                host,
+                port,
+                call.data[ATTR_METHOD],
+                path,
+                headers={"Authorization": f"Bearer {call.data[ATTR_TOKEN]}"},
+                body=call.data.get(ATTR_BODY),
+            )
+        except Exception as err:
+            return {"success": False, "error": f"{type(err).__name__}: {err}"}
+
+        result: dict[str, Any] = {
+            "success": 200 <= status < 300,
+            "status": status,
+            "headers": headers,
+        }
+        stripped = body.strip()
+        try:
+            result["body"] = json.loads(stripped) if stripped else None
+        except ValueError:
+            result["body"] = stripped
+        return result
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_LOCAL_TOKEN,
+        _local_token,
+        schema=LOCAL_TOKEN_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_LOCAL_REQUEST,
+        _local_request,
+        schema=LOCAL_REQUEST_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: SubAcConfigEntry) -> bool:
     """Unload a config entry."""
-    hass.services.async_remove(DOMAIN, SERVICE_PROBE_OCF)
-    hass.services.async_remove(DOMAIN, SERVICE_SEND_COMMAND)
-    hass.services.async_remove(DOMAIN, SERVICE_API_GET)
+    for service in (
+        SERVICE_PROBE_OCF,
+        SERVICE_SEND_COMMAND,
+        SERVICE_API_GET,
+        SERVICE_LOCAL_TOKEN,
+        SERVICE_LOCAL_REQUEST,
+    ):
+        hass.services.async_remove(DOMAIN, service)
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
