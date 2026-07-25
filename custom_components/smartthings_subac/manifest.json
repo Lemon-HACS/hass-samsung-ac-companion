@@ -1,0 +1,14 @@
+{
+  "domain": "smartthings_subac",
+  "name": "SmartThings Sub A/C",
+  "codeowners": ["@LemonDouble"],
+  "config_flow": true,
+  "dependencies": ["smartthings"],
+  "documentation": "https://github.com/Lemon-HACS/hass-smartthings-subac",
+  "integration_type": "service",
+  "iot_class": "cloud_push",
+  "issue_tracker": "https://github.com/Lemon-HACS/hass-smartthings-subac/issues",
+  "requirements": [],
+  "single_config_entry": true,
+  "version": "0.1.0"
+}

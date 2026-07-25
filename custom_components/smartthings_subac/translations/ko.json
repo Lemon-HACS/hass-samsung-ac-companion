@@ -1,0 +1,14 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "SmartThings Sub A/C",
+        "description": "SmartThings 기기의 서브 컴포넌트(예: 2 in 1 에어컨의 벽걸이)를 에어컨 엔티티로 추가합니다.\n\n인증은 기존 SmartThings 통합의 것을 그대로 사용하므로 따로 입력할 값이 없습니다."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "이미 설정되어 있습니다.",
+      "smartthings_not_configured": "먼저 SmartThings 통합을 설정해야 합니다."
+    }
+  }
+}

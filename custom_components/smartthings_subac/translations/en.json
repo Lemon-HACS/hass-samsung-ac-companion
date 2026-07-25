@@ -1,0 +1,14 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "SmartThings Sub A/C",
+        "description": "Adds sub components of a SmartThings device (e.g. the wall-mounted unit of a 2-in-1 air conditioner) as climate entities.\n\nAuthentication is reused from the existing SmartThings integration, so there is nothing to enter."
+      }
+    },
+    "abort": {
+      "single_instance_allowed": "Already configured.",
+      "smartthings_not_configured": "Set up the SmartThings integration first."
+    }
+  }
+}
