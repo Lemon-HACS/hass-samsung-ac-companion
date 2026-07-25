@@ -71,48 +71,168 @@ st_data = st_entry.runtime_data      # SmartThingsData(devices, scenes, rooms, c
   통합 버그가 아니다
 - SmartThings 클라우드 반영 지연이 상당하다 (공식 앱도 동일)
 
-## 무풍(WindFree) 제어 조사 결과 — 실패 (기록용)
+---
 
-미풍·무풍·청정은 SmartThings 표준 capability 밖에 있다. 알려진 경로를 전부
-실기기(FAC_BORA_17K, 2025 펌웨어)로 검증했고, **모두 실패했다.**
+# 로컬 API — 무풍·미풍·청정 완전 제어
+
+SmartThings 클라우드로는 무풍·미풍·청정을 제어할 수 없다. 클라우드 경로를
+전부 시도해 실패한 뒤(아래 "실패한 경로" 참고), **기기의 로컬 REST API**
+로 우회해서 **전부 해결했다.**
+
+## 접속
+
+| 항목 | 값 |
+|---|---|
+| 주소 | `https://<기기IP>:8888` (nginx/1.2.7) |
+| TLS | **1.0 만** 지원 (1.1/1.2 는 handshake 거부) |
+| 인증 | **mTLS + Bearer 토큰** |
+
+인증서 없이 붙으면 `400 No required SSL certificate was sent`.
+삼성이 기기에 심어둔 공용 중간 CA `AC14K_M` 으로 서명된 인증서면 통과하며,
+그 `ac14k_m.pem` 이 이 통합에 동봉되어 있다.
+
+> ⚠️ **OpenSSL 3.x 주의**: 이 인증서는 서명이 약해 기본 security level 에서
+> 거부된다(`ca md too weak`). **`set_ciphers("ALL:@SECLEVEL=0")` 를
+> `load_cert_chain` 보다 먼저** 호출해야 한다. 순서가 바뀌면 실패한다.
+
+## 토큰 발급
+
+```yaml
+action: smartthings_subac.local_token
+data:
+  host: 192.168.0.31
+  wait: 180
+```
+
+**서비스를 실행한 뒤 에어컨 전원을 껐다 켜면** 토큰이 응답으로 돌아온다.
+
+동작 방식에서 주의할 점이 두 가지 있다. 둘 다 문서화된 곳이 없어서 실측으로
+알아냈다.
+
+1. **토큰은 HTTP 응답이 아니라 콜백으로 온다.** `POST /devicetoken/request`
+   는 `200 OK`(빈 바디)만 준다. 요청의 `Host` 헤더에 적힌 주소로 기기가
+   `POST /devicetoken/response` 를 보낸다.
+2. **그 콜백은 평문이 아니라 TLS 다.** 평문 리스너에는 `\x16\x03\x01`
+   (TLS 1.0 ClientHello) 만 찍힌다. 리스너도 TLS 1.0 서버여야 한다.
+
+이 서비스가 리스너 개설·요청·콜백 파싱을 전부 처리한다.
+
+**⚠️ 자동청소건조(`Autoclean`)를 꺼야 한다.** 켜져 있으면 전원을 꺼도 몇 분간
+송풍으로 계속 돌아가서 기기 입장에서는 전원이 꺼진 적이 없는 것이 되고,
+확인이 성립하지 않는다.
+
+확인 전에 재요청하면 `403 ... until completing the process of a previous
+request` 가 나온다. 물리적 전원 차단으로 초기화한다.
+
+## 호출
+
+```yaml
+action: smartthings_subac.local_request
+data:
+  host: 192.168.0.31
+  token: <발급받은 토큰>
+  path: /devices/1/mode
+  method: PUT
+  body: '{"options":["Comode_Nano"]}'
+```
+
+기기 목록은 `GET /devices`. 2 in 1 의 경우 **`0` = 스탠드, `1` = 벽걸이**다
+(SmartThings 의 component `main`/`1` 과 번호가 다르니 주의).
+
+---
+
+## 옵션 레퍼런스 (FAC_BORA_17K 실측)
+
+전부 실기기에서 검증했다. **모델마다 값이 다를 수 있다** — 확인 방법은
+**앱에서 해당 기능을 켠 뒤 `GET /devices/N/mode` 로 읽는 것**이다.
+
+### `PUT /devices/N/mode` → `options`
+
+| 기능 | 값 | 비고 |
+|---|---|---|
+| **무풍** | `Comode_Nano` ↔ `Comode_Off` | 커뮤니티에 알려진 `Comode_WindFree` 가 **아니다** |
+| **정음** | `Comode_Quiet` | |
+| **스피드** | `Comode_Speed` | |
+| 롱바람 | `Comode_LongWind` (추정) | 미검증 |
+| **열대야 쾌면** | `Sleep_N` — **N × 30분** | `Sleep_2`=1시간, `Sleep_24`=12시간(최대), `Sleep_0`=해제 |
+| **바람문 상중하** | `Blooming_N` — **비트마스크** | `1`=상, `2`=중, `4`=하. 합산 조합 (`5`=상+하, `7`=전부) |
+| **자동청소건조** | `Autoclean_On` / `Autoclean_Off` | |
+| **바람문 열기(청소용)** | `Panel_Open` / `Panel_Close` | 물리적으로 열림 |
+| **무드등** | `Light_On` / `Light_Off` | 전면 파란 무드등 |
+| **AI 스마트쾌적** | `AI_Enable` / `AI_Disable` | |
+| 조작음 | `Volume_N` / `Volume_Melody` | `Volume_66`=기본볼륨 |
+
+`Comode_*` 는 **하나의 슬롯**이라 무풍·정음·스피드가 서로 배타적이다
+(앱의 "운전기능" 메뉴와 동일).
+
+**여러 옵션 동시 전송이 가능하다** (`{"options":["Panel_Close","Light_On"]}`).
+단 서로 배타적인 값을 같이 보내면 일부만 적용된다.
+
+**잘못된 옵션 값은 `204` 를 주고 조용히 무시한다.** 응답만 보고 성공으로
+판단하면 안 되고, 반드시 다시 읽어서 확인해야 한다.
+
+### `PUT /devices/N/mode` → `modes`
+
+| 값 | 의미 |
+|---|---|
+| `Cool` / `Dry` / `Auto` | 냉방 / 제습 / 자동 |
+| `Wind` | 청정 (송풍 아님) |
+| **`CoolClean`** | **냉방 + 청정 동시** |
+| `DryClean` | 제습 + 청정 동시 |
+
+> SmartThings 로는 청정(`wind`)이 독립 모드라 냉방과 배타적이었다.
+> **로컬 API 는 `CoolClean` 으로 조합이 된다.** 기기 음성도
+> "공기청정운전을 **추가**합니다"라고 안내한다.
+
+### `PUT /devices/N/wind`
+
+| 필드 | 값 |
+|---|---|
+| `speedLevel` | `0`=무풍, **`1`=미풍**, `2`~`4`=약/강/터보 |
+| `direction` | `Fix`(고정), **`Up_And_Low`**(상하 스윙), `Off` |
+
+> **미풍(`speedLevel: 1`)은 SmartThings 로 지정할 수 없다.**
+> `supportedAcFanModes` 가 `auto/medium/high/turbo` 4개뿐이라 미풍에
+> 대응하는 값이 없고, 앱에서 미풍으로 바꿔도 클라우드에는 이벤트조차 오지
+> 않는다. 로컬 API 로만 가능하다.
+
+`direction` 은 잘못된 값에 **`400 Control fail`** 을 반환한다(options 와 달리
+검증이 있다). `Swing`/`Vertical`/`Rotation` 은 전부 거부됐다.
+
+### 읽기 전용
+
+`GET /devices/N` 으로 한 번에 받을 수 있다.
+
+- `Temperatures` — 현재/설정/최소/최대
+- `Sensors` — `CleanLevel`(공기질), `Odor`(냄새), `Dust`, `FineDust`
+- `EnergyConsumption` — `instantaneousPower`(순간 W), `cumulativeConsumption`
+- `Alarms` — 필터 알람, 에러 코드
+- `Information` — 펌웨어/소프트웨어 버전
+
+건드리지 말 것: `OptionCode_*`(설치 옵션 코드), `RacOptionCode_*`,
+`ModelInfo_*`, `RacInfo_*`, `UsagesDB_*`, `EnergySaveIcon_*`(기기 자체 판단),
+`Operation_Family`/`Operation_Solo`(AI 종속 상태로 추정).
+
+---
+
+## 실패한 경로 (기록용)
+
+클라우드로 무풍을 제어하려던 시도. **전부 실패했고 재시도할 가치가 없다.**
 
 | 시도 | 결과 |
 |---|---|
-| `custom.airConditionerOptionalMode` / `setAcOptionalMode ["windFree"]` | `NotValidValue` 거부 — profile 에 없는 capability 는 API 가 엄격히 검증 |
-| `execute ["mode/vs/0", {"x.com.samsung.da.options": ["Comode_WindFree"]}]` | 클라우드는 수락하지만 **기기가 반응하지 않음** |
-| 같은 형식, `mode/vs/1` | 동일 |
-| execute 로 리소스 읽기 (`/mode/vs/N`) | 결과가 status 에도, device event 로도 오지 않음 (전원 상태 무관) |
+| `custom.airConditionerOptionalMode` / `setAcOptionalMode ["windFree"]` | `NotValidValue` — profile 에 없는 capability 는 API 가 엄격히 검증 |
+| `execute ["mode/vs/N", {"x.com.samsung.da.options": ["Comode_WindFree"]}]` | 클라우드는 수락하지만 **기기가 반응하지 않음** |
+| execute 로 리소스 읽기 | 결과가 status 에도 device event 에도 오지 않음 (전원 상태 무관) |
 
-결론: 이 기기의 최신 펌웨어에서는 **legacy OCF `execute` 브리지가 동작하지
-않는다.** 커뮤니티의 `Comode_WindFree` 성공 사례는 전부 2020~21년경 구형
-펌웨어 기기다. 공식 앱은 SmartThings 공개 API 가 아닌 자체 경로로 무풍을
-제어하는 것으로 보인다.
+이 기기의 펌웨어에서는 **legacy OCF `execute` 브리지가 죽어 있다.**
+커뮤니티의 `Comode_WindFree` 사례는 전부 2020~21년경 구형 펌웨어다.
+앱의 에어컨 화면도 SmartThings 표준 UI 가 아니라 삼성 전용 플러그인
+(`plugin://com.samsung.android.plugin.airconditionershp`, shp = Samsung Home
+Protocol)이라 공개 API 를 거치지 않는다.
 
-**실용적 우회책:** SmartThings 앱에서 무풍 ON/OFF **장면(Scene)** 을 만들면
-코어 통합이 `scene.*` 엔티티로 가져온다. 실행만 가능하고 상태는 읽을 수 없다.
-
-## 조사용 서비스
-
-위 조사에 쓴 서비스 두 개를 남겨뒀다. 다른 모델(구형 펌웨어)에서는 execute
-경로가 살아 있을 수 있다.
-
-```yaml
-# OCF 리소스 읽기 시도 (결과는 device event 로 수신)
-action: smartthings_subac.probe_ocf
-data:
-  st_device_id: <SmartThings deviceId>
-  href: /mode/vs/0
-  component: main       # execute 를 가진 컴포넌트
-
-# 임의 명령 전송 (검증 없이 그대로 전달, 실패해도 오류를 응답으로 반환)
-action: smartthings_subac.send_command
-data:
-  st_device_id: <SmartThings deviceId>
-  capability: execute
-  command: execute
-  component: main
-  arguments: ["mode/vs/0", {"x.com.samsung.da.options": ["Comode_WindFree"]}]
-```
+조사에 쓴 `probe_ocf` / `send_command` / `api_get` 서비스는 다른 모델에서는
+쓸모가 있을 수 있어 남겨뒀다.
 
 ## 설치
 
