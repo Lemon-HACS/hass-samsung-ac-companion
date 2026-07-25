@@ -63,7 +63,13 @@ async def async_setup_entry(
     for device_id, device in coordinator.data.items():
         if "Wind" in device:
             entities.append(FanSpeedSelect(coordinator, device_id))
-            entities.append(WindDirectionSelect(coordinator, device_id))
+
+            # 바람 방향은 `Blooming`(바람문 상/중/하)이 없는 유닛에만 만든다.
+            # 스탠드는 바람문으로 방향을 정하고 `direction` 은 계속 `Off` 라
+            # 노출해봐야 항상 '알 수 없음'이 된다. 두 방식은 배타적이다.
+            if LocalAcCoordinator.get_option(device, "Blooming") is None:
+                entities.append(WindDirectionSelect(coordinator, device_id))
+
         if LocalAcCoordinator.get_option(device, "Comode") is not None:
             entities.append(ComodeSelect(coordinator, device_id))
     async_add_entities(entities)
