@@ -1,4 +1,4 @@
-"""Config flow for SmartThings Sub A/C."""
+"""Config flow for Samsung AC Companion."""
 
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ class SmartThingsSubAcConfigFlow(ConfigFlow, domain=DOMAIN):
         if user_input is None:
             return self.async_show_form(step_id="user")
 
-        return self.async_create_entry(title="SmartThings Sub A/C", data={})
+        return self.async_create_entry(title="Samsung AC Companion", data={})
 
     @staticmethod
     @callback
@@ -55,7 +55,7 @@ class SmartThingsSubAcConfigFlow(ConfigFlow, domain=DOMAIN):
 class SmartThingsSubAcOptionsFlow(OptionsFlow):
     """로컬 API 설정.
 
-    토큰은 `smartthings_subac.local_token` 서비스로 발급받아 여기에 넣는다.
+    토큰은 `samsung_ac_companion.local_token` 서비스로 발급받아 여기에 넣는다.
     """
 
     async def async_step_init(

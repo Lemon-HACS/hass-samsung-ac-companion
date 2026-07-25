@@ -15,9 +15,13 @@ from . import SubAcConfigEntry
 from .coordinator import LocalAcCoordinator
 from .entity import LocalAcEntity
 
-# speedLevel ↔ 표시 이름
+# speedLevel ↔ 표시 이름. 앱의 "바람세기" 5단계와 그대로 대응한다.
+#
+# 무풍은 여기 없다 — 무풍은 `Comode_Nano`(별도 스위치)이고, 켜지면
+# speedLevel 이 0 으로 밀릴 뿐이다. 앱에서도 "바람세기"와 "무풍"은 별개
+# 메뉴다.
 SPEED_LEVELS: dict[int, str] = {
-    0: "무풍",
+    0: "자동풍",
     1: "미풍",
     2: "약풍",
     3: "강풍",
@@ -65,26 +69,12 @@ class FanSpeedSelect(LocalAcEntity, SelectEntity):
     async def async_select_option(self, option: str) -> None:
         """풍량 변경.
 
-        무풍(0)은 speedLevel 로 직접 지정되지 않고 `Comode_Nano` 로 켜야 한다.
-        반대로 무풍이 켜진 상태에서는 speedLevel 변경이 무시되므로 먼저 끈다.
+        무풍이 켜져 있으면 기기가 풍량 변경을 무시하므로 먼저 해제한다.
         """
         level = NAME_TO_LEVEL[option]
-        comode = LocalAcCoordinator.get_option(self.device, "Comode")
 
-        if level == 0:
-            self.coordinator.apply_optimistic_option(
-                self._device_id, "Comode", "Nano"
-            )
-            self.coordinator.apply_optimistic_wind(self._device_id, "speedLevel", 0)
-            await self.coordinator.async_send(
-                self._device_id, "mode", {"options": ["Comode_Nano"]}
-            )
-            return
-
-        if comode == "Nano":
-            self.coordinator.apply_optimistic_option(
-                self._device_id, "Comode", "Off"
-            )
+        if LocalAcCoordinator.get_option(self.device, "Comode") == "Nano":
+            self.coordinator.apply_optimistic_option(self._device_id, "Comode", "Off")
             await self.coordinator.async_send(
                 self._device_id, "mode", {"options": ["Comode_Off"]}
             )

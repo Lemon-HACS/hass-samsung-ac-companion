@@ -1,6 +1,6 @@
-"""Constants for the SmartThings Sub A/C integration."""
+"""Constants for the Samsung AC Companion integration."""
 
-DOMAIN = "smartthings_subac"
+DOMAIN = "samsung_ac_companion"
 
 # 코어 SmartThings 통합의 도메인. 디바이스 레지스트리 identifier를 공유해서
 # 서브 컴포넌트를 코어가 만든 기기의 하위 기기로 붙인다.

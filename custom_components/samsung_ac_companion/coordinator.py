@@ -41,7 +41,7 @@ class LocalAcCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         super().__init__(
             hass,
             _LOGGER,
-            name="smartthings_subac local",
+            name="samsung_ac_companion local",
             update_interval=timedelta(seconds=scan_interval),
         )
         self.host = host
@@ -72,7 +72,7 @@ class LocalAcCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
 
         if status == 401:
             raise UpdateFailed(
-                "토큰이 유효하지 않습니다. smartthings_subac.local_token 으로 재발급하세요."
+                "토큰이 유효하지 않습니다. samsung_ac_companion.local_token 으로 재발급하세요."
             )
         if status != 200:
             raise UpdateFailed(f"예상치 못한 응답: {status}")

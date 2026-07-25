@@ -1,6 +1,33 @@
-# SmartThings Sub A/C
+# Samsung AC Companion
 
-HA 코어 SmartThings 통합이 만들어주지 않는 **서브 컴포넌트 에어컨**을 엔티티로 추가하는 커스텀 통합.
+**공식 SmartThings 통합이 못 하는 것을 채우는** 삼성 에어컨용 HA 커스텀 통합.
+
+공식 통합을 대체하지 않는다. 그 위에 얹혀서 두 가지를 더한다.
+
+1. **2 in 1 에어컨의 서브 유닛(벽걸이)** — 공식 통합은 `main` 컴포넌트만
+   엔티티로 만든다
+2. **로컬 API 로만 되는 기능** — 무풍, 미풍, 냉방+청정 동시, 순간 전력 등
+   SmartThings 클라우드에 아예 노출되지 않는 것들
+
+엔티티는 공식 통합이 만든 **기기에 그대로 붙으므로**, 기기 화면에서는 한
+덩어리로 보인다.
+
+## 만들어지는 엔티티
+
+| 엔티티 | 기능 | 경로 |
+|---|---|---|
+| `climate.*` | 벽걸이 에어컨 | SmartThings 클라우드 |
+| `switch.*_mupung` | 무풍 | 로컬 API |
+| `select.*_pungryang` | 풍량 5단계 (**미풍 포함**) | 로컬 API |
+| `switch.*_mudeudeung` | 무드등 | 로컬 API |
+| `switch.*_jadongceongso` | 자동청소건조 | 로컬 API |
+| `sensor.*_sungan_jeonryeog` | 순간 전력(W) | 로컬 API |
+
+로컬 API 기능은 옵션에서 IP·토큰을 설정해야 활성화된다 (아래 참고).
+
+---
+
+## 서브 컴포넌트 에어컨 (클라우드)
 
 ## 문제
 
@@ -98,7 +125,7 @@ SmartThings 클라우드로는 무풍·미풍·청정을 제어할 수 없다. �
 ## 토큰 발급
 
 ```yaml
-action: smartthings_subac.local_token
+action: samsung_ac_companion.local_token
 data:
   host: 192.168.0.31
   wait: 180
@@ -127,7 +154,7 @@ request` 가 나온다. 물리적 전원 차단으로 초기화한다.
 ## 호출
 
 ```yaml
-action: smartthings_subac.local_request
+action: samsung_ac_companion.local_request
 data:
   host: 192.168.0.31
   token: <발급받은 토큰>
@@ -188,8 +215,12 @@ data:
 
 | 필드 | 값 |
 |---|---|
-| `speedLevel` | `0`=무풍, **`1`=미풍**, `2`~`4`=약/강/터보 |
+| `speedLevel` | `0`=자동풍, **`1`=미풍**, `2`/`3`/`4`=약풍/강풍/터보 |
 | `direction` | `Fix`(고정), **`Up_And_Low`**(상하 스윙), `Off` |
+
+> **무풍은 `speedLevel` 이 아니다.** 무풍은 `Comode_Nano` 이고, 켜지면
+> `speedLevel` 이 0 으로 밀릴 뿐이다. 앱에서도 "바람세기"(5단계)와
+> "무풍"(on/off)은 별개 메뉴다.
 
 > **미풍(`speedLevel: 1`)은 SmartThings 로 지정할 수 없다.**
 > `supportedAcFanModes` 가 `auto/medium/high/turbo` 4개뿐이라 미풍에
@@ -236,9 +267,9 @@ Protocol)이라 공개 API 를 거치지 않는다.
 
 ## 설치
 
-1. `custom_components/smartthings_subac/` 를 HA 의 `config/custom_components/` 아래에 복사
+1. `custom_components/samsung_ac_companion/` 를 HA 의 `config/custom_components/` 아래에 복사
 2. HA 재시작
-3. 설정 → 기기 및 서비스 → 통합 추가 → **SmartThings Sub A/C**
+3. 설정 → 기기 및 서비스 → 통합 추가 → **Samsung AC Companion**
 
 SmartThings 통합이 먼저 설정되어 있어야 한다.
 
@@ -258,7 +289,7 @@ SmartThings 통합이 먼저 설정되어 있어야 한다.
 ```yaml
 logger:
   logs:
-    custom_components.smartthings_subac: debug
+    custom_components.samsung_ac_companion: debug
 ```
 
 ## 코어 업데이트 시 확인할 지점

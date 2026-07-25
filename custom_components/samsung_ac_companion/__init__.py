@@ -160,7 +160,7 @@ def _find_loaded_smartthings_entry(hass: HomeAssistant) -> ConfigEntry | None:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: SubAcConfigEntry) -> bool:
-    """Set up SmartThings Sub A/C from a config entry."""
+    """Set up Samsung AC Companion from a config entry."""
     st_entry = _find_loaded_smartthings_entry(hass)
     if st_entry is None:
         # 코어 통합이 아직 안 올라왔거나 재인증 중인 상태.
