@@ -31,6 +31,9 @@ from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers import config_validation as cv
 
 from .const import (
+    ATTR_ARGUMENTS,
+    ATTR_CAPABILITY,
+    ATTR_COMMAND,
     ATTR_COMPONENT,
     ATTR_HREF,
     ATTR_INCLUDE_RAW,
@@ -38,6 +41,7 @@ from .const import (
     ATTR_WAIT,
     DOMAIN,
     SERVICE_PROBE_OCF,
+    SERVICE_SEND_COMMAND,
     ST_DOMAIN,
 )
 
@@ -58,6 +62,18 @@ PROBE_OCF_SCHEMA = vol.Schema(
             vol.Coerce(float), vol.Range(min=0, max=30)
         ),
         vol.Optional(ATTR_INCLUDE_RAW, default=False): cv.boolean,
+    }
+)
+
+SEND_COMMAND_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_ST_DEVICE_ID): cv.string,
+        vol.Required(ATTR_CAPABILITY): cv.string,
+        vol.Required(ATTR_COMMAND): cv.string,
+        vol.Optional(ATTR_COMPONENT, default="main"): cv.string,
+        # 리스트 그대로 SmartThings 의 commands.arguments 로 전달된다.
+        # execute 의 경우 ["mode/vs/0", {"x.com.samsung.da.options": [...]}] 형태.
+        vol.Optional(ATTR_ARGUMENTS): list,
     }
 )
 
@@ -176,11 +192,40 @@ async def async_setup_entry(hass: HomeAssistant, entry: SubAcConfigEntry) -> boo
         )
         return result
 
+    async def _send_command(call: ServiceCall) -> ServiceResponse:
+        """임의의 SmartThings 명령을 보낸다 (조사/고급 사용자용).
+
+        device profile 에 없는 capability 도 시도해볼 수 있도록 검증 없이
+        그대로 전달한다. 실패해도 예외 대신 오류 내용을 응답으로 돌려준다.
+        """
+        client = st_entry.runtime_data.client
+        arguments: list[Any] | None = call.data.get(ATTR_ARGUMENTS)
+
+        try:
+            await client.execute_device_command(
+                call.data[ATTR_ST_DEVICE_ID],
+                call.data[ATTR_CAPABILITY],
+                call.data[ATTR_COMMAND],
+                call.data[ATTR_COMPONENT],
+                argument=arguments,
+            )
+        except Exception as err:
+            return {"success": False, "error": f"{type(err).__name__}: {err}"}
+
+        return {"success": True}
+
     hass.services.async_register(
         DOMAIN,
         SERVICE_PROBE_OCF,
         _probe_ocf,
         schema=PROBE_OCF_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_SEND_COMMAND,
+        _send_command,
+        schema=SEND_COMMAND_SCHEMA,
         supports_response=SupportsResponse.ONLY,
     )
 
@@ -191,4 +236,5 @@ async def async_setup_entry(hass: HomeAssistant, entry: SubAcConfigEntry) -> boo
 async def async_unload_entry(hass: HomeAssistant, entry: SubAcConfigEntry) -> bool:
     """Unload a config entry."""
     hass.services.async_remove(DOMAIN, SERVICE_PROBE_OCF)
+    hass.services.async_remove(DOMAIN, SERVICE_SEND_COMMAND)
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

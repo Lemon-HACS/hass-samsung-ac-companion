@@ -47,3 +47,47 @@ probe_ocf:
       default: false
       selector:
         boolean:
+
+send_command:
+  name: SmartThings 명령 전송
+  description: >-
+    임의의 SmartThings 명령을 검증 없이 전달한다. device profile 에 노출되지
+    않은 capability(예: 무풍 execute 페이로드)를 시도할 때 쓴다.
+    실패해도 예외 대신 오류 내용을 응답으로 돌려준다.
+  fields:
+    st_device_id:
+      name: SmartThings 기기 ID
+      description: SmartThings 의 deviceId (HA device_id 가 아님)
+      required: true
+      example: C0972770-32BB-0000-0000-000000000000
+      selector:
+        text:
+    capability:
+      name: Capability
+      description: 예) execute, custom.airConditionerOptionalMode
+      required: true
+      example: execute
+      selector:
+        text:
+    command:
+      name: Command
+      description: 예) execute, setAcOptionalMode
+      required: true
+      example: execute
+      selector:
+        text:
+    component:
+      name: 컴포넌트
+      required: false
+      default: main
+      example: main
+      selector:
+        text:
+    arguments:
+      name: Arguments
+      description: >-
+        commands.arguments 로 그대로 전달되는 리스트.
+        예) ["mode/vs/0", {"x.com.samsung.da.options": ["Comode_WindFree"]}]
+      required: false
+      selector:
+        object:

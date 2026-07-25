@@ -15,9 +15,13 @@ HEAT_PUMP_COMPONENTS = {"INDOOR", "INDOOR1", "INDOOR2"}
 # 않는 기능은 `execute` capability 를 통해 OCF 리소스를 직접 조작하는 것으로
 # 보인다. 그 경로를 찾기 위한 조사용 서비스.
 SERVICE_PROBE_OCF = "probe_ocf"
+SERVICE_SEND_COMMAND = "send_command"
 
 ATTR_ST_DEVICE_ID = "st_device_id"
 ATTR_HREF = "href"
 ATTR_COMPONENT = "component"
 ATTR_WAIT = "wait"
 ATTR_INCLUDE_RAW = "include_raw"
+ATTR_CAPABILITY = "capability"
+ATTR_COMMAND = "command"
+ATTR_ARGUMENTS = "arguments"
