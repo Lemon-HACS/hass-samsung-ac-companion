@@ -7,6 +7,7 @@ from typing import Any
 
 from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import SubAcConfigEntry
@@ -67,13 +68,19 @@ async def async_setup_entry(
     if coordinator is None:
         return
 
-    entities: list[LocalAcSwitch] = []
+    entities: list[SwitchEntity] = []
     for device_id, device in coordinator.data.items():
         for description in SWITCHES:
             # 해당 유닛이 지원하지 않는 옵션은 건너뛴다.
             if LocalAcCoordinator.get_option(device, description.prefix) is None:
                 continue
             entities.append(LocalAcSwitch(coordinator, device_id, description))
+
+        # 바람문 상/중/하 (비트마스크). 이 옵션이 있는 유닛에만 만든다.
+        if LocalAcCoordinator.get_option(device, "Blooming") is not None:
+            for bit, label in ((1, "상"), (2, "중"), (4, "하")):
+                entities.append(BloomingSwitch(coordinator, device_id, bit, label))
+
     async_add_entities(entities)
 
 
@@ -115,4 +122,67 @@ class LocalAcSwitch(LocalAcEntity, SwitchEntity):
         self.coordinator.apply_optimistic_option(self._device_id, prefix, value)
         await self.coordinator.async_send(
             self._device_id, "mode", {"options": [f"{prefix}_{value}"]}
+        )
+
+
+class BloomingSwitch(LocalAcEntity, SwitchEntity):
+    """바람문 상/중/하 (`Blooming_N` 비트마스크).
+
+    `1`=상, `2`=중, `4`=하 이고 합산으로 조합된다 (`5`=상+하, `7`=전부).
+    각 위치를 독립 스위치로 노출한다.
+    """
+
+    _attr_icon = "mdi:air-conditioner"
+
+    def __init__(
+        self,
+        coordinator: LocalAcCoordinator,
+        device_id: str,
+        bit: int,
+        label: str,
+    ) -> None:
+        """Initialize."""
+        super().__init__(coordinator, device_id, f"blooming_{bit}")
+        self._bit = bit
+        self._attr_name = f"바람문 {label}"
+
+    @property
+    def _mask(self) -> int | None:
+        raw = LocalAcCoordinator.get_option(self.device, "Blooming")
+        if raw is None or not raw.isdigit():
+            return None
+        return int(raw)
+
+    @property
+    def is_on(self) -> bool:
+        """이 위치의 비트가 켜져 있는지."""
+        mask = self._mask
+        return bool(mask is not None and mask & self._bit)
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Turn on."""
+        await self._apply(lambda mask: mask | self._bit)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Turn off."""
+        await self._apply(lambda mask: mask & ~self._bit)
+
+    async def _apply(self, transform) -> None:
+        mask = self._mask
+        if mask is None:
+            return
+        new_mask = transform(mask) & 0b111
+        if new_mask == mask:
+            return
+        # 전부 닫으면 바람이 나올 곳이 없다. 기기가 거부할 수 있으므로 막는다.
+        if new_mask == 0:
+            raise HomeAssistantError(
+                "바람문을 전부 닫을 수는 없습니다. 최소 한 곳은 열려 있어야 합니다."
+            )
+
+        self.coordinator.apply_optimistic_option(
+            self._device_id, "Blooming", str(new_mask)
+        )
+        await self.coordinator.async_send(
+            self._device_id, "mode", {"options": [f"Blooming_{new_mask}"]}
         )
