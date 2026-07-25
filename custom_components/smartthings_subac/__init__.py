@@ -102,46 +102,78 @@ async def async_setup_entry(hass: HomeAssistant, entry: SubAcConfigEntry) -> boo
     async def _probe_ocf(call: ServiceCall) -> ServiceResponse:
         """`execute` capability 로 OCF 리소스를 읽어본다 (조사용).
 
-        SmartThings 는 execute 명령의 결과를 곧바로 돌려주지 않고, 해당
-        컴포넌트의 `execute` capability 의 `data` 속성에 비동기로 채워 넣는다.
-        그래서 명령을 보낸 뒤 잠깐 기다렸다가 상태를 다시 읽어야 한다.
+        SmartThings 는 execute 결과를 status API 에 저장하지 않는다
+        (`/devices/{id}/status` 의 execute.data 는 계속 null 이다).
+        결과는 오직 **device event** 로만 흘러오므로, 명령을 보내기 전에
+        execute capability 의 이벤트 리스너를 걸어두고 기다려야 한다.
         """
         client = st_entry.runtime_data.client
         device_id: str = call.data[ATTR_ST_DEVICE_ID]
         href: str = call.data[ATTR_HREF]
         component: str = call.data[ATTR_COMPONENT]
+        timeout: float = call.data[ATTR_WAIT]
+
+        future: asyncio.Future[dict[str, Any]] = hass.loop.create_future()
+
+        @callback
+        def _on_execute_event(event: Any) -> None:
+            """execute capability 이벤트 수신."""
+            if not future.done():
+                future.set_result(
+                    {
+                        "value": getattr(event, "value", None),
+                        "data": getattr(event, "data", None),
+                        "attribute": str(getattr(event, "attribute", "")),
+                    }
+                )
+
+        remove_listener = client.add_device_capability_event_listener(
+            device_id, component, Capability.EXECUTE, _on_execute_event
+        )
 
         try:
-            await client.execute_device_command(
-                device_id,
-                Capability.EXECUTE,
-                Command.EXECUTE,
-                component,
-                argument=href,
-            )
-        except Exception as err:
-            raise HomeAssistantError(
-                f"execute 명령 실패 (href={href}, component={component}): {err}"
-            ) from err
+            try:
+                await client.execute_device_command(
+                    device_id,
+                    Capability.EXECUTE,
+                    Command.EXECUTE,
+                    component,
+                    argument=href,
+                )
+            except Exception as err:
+                raise HomeAssistantError(
+                    f"execute 명령 실패 (href={href}, component={component}): {err}"
+                ) from err
 
-        await asyncio.sleep(call.data[ATTR_WAIT])
-
-        raw: dict[str, Any] = await client.get_raw_device_status(device_id)
-        components: dict[str, Any] = raw.get("components", {})
-        execute_data = (
-            components.get(component, {}).get("execute", {}).get("data", {})
-        )
+            try:
+                event_result: dict[str, Any] | None = await asyncio.wait_for(
+                    future, timeout=timeout
+                )
+                timed_out = False
+            except TimeoutError:
+                event_result = None
+                timed_out = True
+        finally:
+            remove_listener()
 
         result: dict[str, Any] = {
             "href": href,
             "component": component,
-            "execute_data": execute_data,
-            "components_present": sorted(components),
+            "event": event_result,
+            "timed_out": timed_out,
         }
+
         if call.data[ATTR_INCLUDE_RAW]:
+            raw: dict[str, Any] = await client.get_raw_device_status(device_id)
             result["raw"] = raw
 
-        _LOGGER.debug("probe_ocf %s [%s] -> %s", href, component, execute_data)
+        _LOGGER.debug(
+            "probe_ocf %s [%s] -> %s (timeout=%s)",
+            href,
+            component,
+            event_result,
+            timed_out,
+        )
         return result
 
     hass.services.async_register(
