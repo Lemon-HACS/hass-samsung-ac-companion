@@ -245,8 +245,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: SubAcConfigEntry) -> boo
         """인증된 클라이언트로 SmartThings API 에 GET 요청을 보낸다 (조사용).
 
         pysmartthings 가 래핑하지 않는 엔드포인트(예: device presentation)를
-        조회할 때 쓴다. 응답은 JSON 파싱해서 돌려주고, 파싱 실패 시 원문을
-        돌려준다.
+        조회할 때 쓴다. pysmartthings 의 `_get` 은 Accept 헤더를
+        `application/vnd.smartthings+json;v=1` 로 하드코딩하는데 presentation
+        엔드포인트가 이를 거부하므로(NotAcceptableError), 클라이언트의 세션과
+        인증 헤더만 빌려서 `application/json` 으로 직접 요청한다.
         """
         import json as _json
 
@@ -255,8 +257,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: SubAcConfigEntry) -> boo
         params: dict[str, Any] | None = call.data.get(ATTR_PARAMS)
 
         try:
-            # 내부 메서드지만 인증/토큰 갱신을 그대로 재사용하기 위해 쓴다.
-            text = await client._get(path, params=params)  # noqa: SLF001
+            await client.refresh_token()
+            headers = {
+                "Accept": "application/json",
+                **client._get_headers(),  # noqa: SLF001 — Authorization 재사용
+            }
+            async with asyncio.timeout(30):
+                response = await client.session.request(
+                    "GET",
+                    f"https://api.smartthings.com/{path}",
+                    headers=headers,
+                    params=params,
+                )
+                text = await response.text()
         except Exception as err:
             return {"success": False, "error": f"{type(err).__name__}: {err}"}
 
@@ -265,7 +278,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: SubAcConfigEntry) -> boo
         except ValueError:
             body = text
 
-        return {"success": True, "body": body}
+        return {"success": True, "status": response.status, "body": body}
 
     hass.services.async_register(
         DOMAIN,
