@@ -14,16 +14,25 @@
 
 ## 만들어지는 엔티티
 
-| 엔티티 | 기능 | 경로 |
+| 엔티티 | 기능 | 비고 |
 |---|---|---|
-| `climate.*` | 벽걸이 에어컨 | SmartThings 클라우드 |
-| `switch.*_mupung` | 무풍 | 로컬 API |
-| `select.*_pungryang` | 풍량 5단계 (**미풍 포함**) | 로컬 API |
-| `switch.*_mudeudeung` | 무드등 | 로컬 API |
-| `switch.*_jadongceongso` | 자동청소건조 | 로컬 API |
-| `sensor.*_sungan_jeonryeog` | 순간 전력(W) | 로컬 API |
+| `climate.*` | 에어컨 본체 | 벽걸이는 공식 통합에 없음 |
+| `select.*_unjeongineung` | 운전기능 | 해제/무풍/정음/스피드/롱바람 |
+| `select.*_pungryang` | 풍량 | 자동/**미풍**/약/강/터보 |
+| `select.*_baram_banghyang` | 바람 방향 | 고정/상하 — 바람문 없는 유닛만 |
+| `switch.*_mupung` | 무풍 | 운전기능과 같은 슬롯 |
+| `switch.*_mudeudeung` | 무드등 | |
+| `switch.*_jadongceongso` | 자동청소건조 | |
+| `number.*_yeoldaeya_kwaemyeon` | 열대야 쾌면 | 0~12시간, 30분 단위 |
+| `switch.*_barammun_{sang,jung,ha}` | 바람문 상/중/하 | 비트마스크 조합, 스탠드만 |
+| `sensor.*_sungan_jeonryeog` | 순간 전력(W) | |
 
-로컬 API 기능은 옵션에서 IP·토큰을 설정해야 활성화된다 (아래 참고).
+`climate` 를 뺀 나머지는 전부 로컬 API 기반이라, 옵션에서 IP·토큰을 설정해야
+활성화된다 (아래 참고).
+
+**바람 방향과 바람문은 배타적이다.** 스탠드는 `Blooming`(상/중/하)으로 방향을
+정하고 `wind.direction` 은 계속 `Off` 이므로, 바람문이 있는 유닛에는 방향
+select 를 만들지 않는다.
 
 ---
 
