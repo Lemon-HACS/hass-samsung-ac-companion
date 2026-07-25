@@ -37,9 +37,12 @@ from .const import (
     ATTR_COMPONENT,
     ATTR_HREF,
     ATTR_INCLUDE_RAW,
+    ATTR_PARAMS,
+    ATTR_PATH,
     ATTR_ST_DEVICE_ID,
     ATTR_WAIT,
     DOMAIN,
+    SERVICE_API_GET,
     SERVICE_PROBE_OCF,
     SERVICE_SEND_COMMAND,
     ST_DOMAIN,
@@ -74,6 +77,15 @@ SEND_COMMAND_SCHEMA = vol.Schema(
         # 리스트 그대로 SmartThings 의 commands.arguments 로 전달된다.
         # execute 의 경우 ["mode/vs/0", {"x.com.samsung.da.options": [...]}] 형태.
         vol.Optional(ATTR_ARGUMENTS): list,
+    }
+)
+
+API_GET_SCHEMA = vol.Schema(
+    {
+        # https://api.smartthings.com/ 뒤에 붙는 경로.
+        # 예) devices/{deviceId}/presentation
+        vol.Required(ATTR_PATH): cv.string,
+        vol.Optional(ATTR_PARAMS): dict,
     }
 )
 
@@ -229,6 +241,40 @@ async def async_setup_entry(hass: HomeAssistant, entry: SubAcConfigEntry) -> boo
         supports_response=SupportsResponse.ONLY,
     )
 
+    async def _api_get(call: ServiceCall) -> ServiceResponse:
+        """인증된 클라이언트로 SmartThings API 에 GET 요청을 보낸다 (조사용).
+
+        pysmartthings 가 래핑하지 않는 엔드포인트(예: device presentation)를
+        조회할 때 쓴다. 응답은 JSON 파싱해서 돌려주고, 파싱 실패 시 원문을
+        돌려준다.
+        """
+        import json as _json
+
+        client = st_entry.runtime_data.client
+        path: str = call.data[ATTR_PATH].lstrip("/")
+        params: dict[str, Any] | None = call.data.get(ATTR_PARAMS)
+
+        try:
+            # 내부 메서드지만 인증/토큰 갱신을 그대로 재사용하기 위해 쓴다.
+            text = await client._get(path, params=params)  # noqa: SLF001
+        except Exception as err:
+            return {"success": False, "error": f"{type(err).__name__}: {err}"}
+
+        try:
+            body: Any = _json.loads(text)
+        except ValueError:
+            body = text
+
+        return {"success": True, "body": body}
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_API_GET,
+        _api_get,
+        schema=API_GET_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
@@ -237,4 +283,5 @@ async def async_unload_entry(hass: HomeAssistant, entry: SubAcConfigEntry) -> bo
     """Unload a config entry."""
     hass.services.async_remove(DOMAIN, SERVICE_PROBE_OCF)
     hass.services.async_remove(DOMAIN, SERVICE_SEND_COMMAND)
+    hass.services.async_remove(DOMAIN, SERVICE_API_GET)
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)

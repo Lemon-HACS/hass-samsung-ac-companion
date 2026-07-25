@@ -91,3 +91,22 @@ send_command:
       required: false
       selector:
         object:
+
+api_get:
+  name: SmartThings API GET
+  description: >-
+    코어 통합의 인증된 클라이언트로 SmartThings API 에 GET 요청을 보낸다.
+    pysmartthings 가 래핑하지 않는 엔드포인트(device presentation 등) 조회용.
+  fields:
+    path:
+      name: 경로
+      description: https://api.smartthings.com/ 뒤에 붙는 경로
+      required: true
+      example: devices/C0972770-32BB-0000-0000-000000000000/presentation
+      selector:
+        text:
+    params:
+      name: 쿼리 파라미터
+      required: false
+      selector:
+        object:

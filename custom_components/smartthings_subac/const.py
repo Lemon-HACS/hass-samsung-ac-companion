@@ -16,6 +16,10 @@ HEAT_PUMP_COMPONENTS = {"INDOOR", "INDOOR1", "INDOOR2"}
 # 보인다. 그 경로를 찾기 위한 조사용 서비스.
 SERVICE_PROBE_OCF = "probe_ocf"
 SERVICE_SEND_COMMAND = "send_command"
+SERVICE_API_GET = "api_get"
+
+ATTR_PATH = "path"
+ATTR_PARAMS = "params"
 
 ATTR_ST_DEVICE_ID = "st_device_id"
 ATTR_HREF = "href"
