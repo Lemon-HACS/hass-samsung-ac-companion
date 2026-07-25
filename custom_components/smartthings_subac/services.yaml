@@ -1,0 +1,49 @@
+probe_ocf:
+  name: OCF 리소스 조회
+  description: >-
+    execute capability 로 삼성 OCF 기기의 리소스를 읽어본다. SmartThings 표준
+    capability 로 노출되지 않는 기능(무풍/미풍/청정 등)의 제어 경로를 찾기 위한
+    조사용 서비스다. `/oic/res` 로 리소스 목록부터 확인하는 것을 권장한다.
+  fields:
+    st_device_id:
+      name: SmartThings 기기 ID
+      description: SmartThings 의 deviceId (HA device_id 가 아님)
+      required: true
+      example: C0972770-32BB-0000-0000-000000000000
+      selector:
+        text:
+    href:
+      name: OCF 리소스 경로
+      description: 읽어올 OCF 리소스 경로
+      required: true
+      example: /oic/res
+      selector:
+        text:
+    component:
+      name: 컴포넌트
+      description: 명령을 보낼 컴포넌트. execute capability 를 가진 컴포넌트여야 한다
+      required: false
+      default: main
+      example: main
+      selector:
+        text:
+    wait:
+      name: 대기 시간(초)
+      description: >-
+        execute 결과는 비동기로 채워지므로 명령 후 이만큼 기다렸다가 상태를
+        다시 읽는다
+      required: false
+      default: 3
+      selector:
+        number:
+          min: 0
+          max: 30
+          step: 0.5
+          unit_of_measurement: 초
+    include_raw:
+      name: 전체 상태 포함
+      description: 응답에 기기의 raw status 전체를 포함한다 (응답이 커진다)
+      required: false
+      default: false
+      selector:
+        boolean:

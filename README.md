@@ -56,10 +56,38 @@ st_data = st_entry.runtime_data      # SmartThingsData(devices, scenes, rooms, c
 | 풍량 (auto/medium/high/turbo) | ✅ | `airConditionerFanMode` |
 | 목표 온도 | ✅ | `thermostatCoolingSetpoint` |
 | 현재 실내온도 | ✅ | `temperatureMeasurement` |
-| 무풍 / 청정 | ❌ | `custom.airConditionerOptionalMode` 없음 |
+| 미풍 / 무풍 / 청정 | ❌ | 표준 capability 로 노출되지 않음 |
 
-무풍·청정은 기기가 SmartThings API 로 해당 capability 를 노출하지 않으면 제어할 수 없다.
-(SmartThings 앱은 `execute` capability 를 통한 OCF 리소스 직접 제어를 쓰는 것으로 추정)
+### 실기기에서 확인된 동작 (FAC_BORA_17K)
+
+- 풍량 매핑: `medium` = **약풍**, `high` = **강풍**
+- 기기 UI 는 풍량이 5단계(자동/미풍/약풍/강풍/터보)인데 `supportedAcFanModes`
+  는 4개뿐이다. **미풍은 앱에서 바꿔도 `airConditionerFanMode` 에 이벤트가
+  오지 않는다** — 즉 이 capability 로 표현되지 않는다
+- **자동 모드에서는 풍량이 자동풍으로 고정**되어 `setFanMode` 가 무시된다.
+  냉방 모드에서는 정상 동작한다
+- **전원이 꺼져 있으면 풍량·온도 명령이 무시된다.** 명령 자체는 기기까지
+  도달하지만(수신음) 상태가 바뀌지 않는다. 코어 통합인 스탠드도 동일하므로
+  통합 버그가 아니다
+- SmartThings 클라우드 반영 지연이 상당하다 (공식 앱도 동일)
+
+## OCF 리소스 조사 (`probe_ocf`)
+
+미풍·무풍·청정은 SmartThings 표준 capability 밖에 있다. 앱은 `main` 에만
+존재하는 `execute` capability 로 OCF 리소스를 직접 조작하는 것으로 보인다.
+그 경로를 찾기 위한 조사용 서비스를 제공한다.
+
+```yaml
+action: smartthings_subac.probe_ocf
+data:
+  st_device_id: C0972770-32BB-0000-0000-000000000000   # SmartThings deviceId
+  href: /oic/res                                       # 리소스 목록부터
+  component: main                                      # execute 를 가진 컴포넌트
+```
+
+SmartThings 는 execute 결과를 즉시 돌려주지 않고 해당 컴포넌트의 `execute`
+capability 의 `data` 속성에 비동기로 채워 넣는다. 그래서 이 서비스는 명령을
+보낸 뒤 `wait` 초만큼 기다렸다가 상태를 다시 읽어 응답으로 돌려준다.
 
 ## 설치
 

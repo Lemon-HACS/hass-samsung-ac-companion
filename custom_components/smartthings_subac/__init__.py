@@ -11,14 +11,35 @@ HA 코어의 SmartThings 통합은 에어컨 엔티티를 `main` 컴포넌트에
 
 from __future__ import annotations
 
+import asyncio
 import logging
+from typing import Any
+
+import voluptuous as vol
+from pysmartthings import Capability, Command
 
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant, callback
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.core import (
+    HomeAssistant,
+    ServiceCall,
+    ServiceResponse,
+    SupportsResponse,
+    callback,
+)
+from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
+from homeassistant.helpers import config_validation as cv
 
-from .const import ST_DOMAIN
+from .const import (
+    ATTR_COMPONENT,
+    ATTR_HREF,
+    ATTR_INCLUDE_RAW,
+    ATTR_ST_DEVICE_ID,
+    ATTR_WAIT,
+    DOMAIN,
+    SERVICE_PROBE_OCF,
+    ST_DOMAIN,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -27,6 +48,18 @@ PLATFORMS = [Platform.CLIMATE]
 # runtime_data 로 코어 SmartThings 의 config entry 를 들고 있는다.
 # 실제 데이터(client, devices)는 그쪽 entry.runtime_data 에 있다.
 type SubAcConfigEntry = ConfigEntry[ConfigEntry]
+
+PROBE_OCF_SCHEMA = vol.Schema(
+    {
+        vol.Required(ATTR_ST_DEVICE_ID): cv.string,
+        vol.Required(ATTR_HREF): cv.string,
+        vol.Optional(ATTR_COMPONENT, default="main"): cv.string,
+        vol.Optional(ATTR_WAIT, default=3.0): vol.All(
+            vol.Coerce(float), vol.Range(min=0, max=30)
+        ),
+        vol.Optional(ATTR_INCLUDE_RAW, default=False): cv.boolean,
+    }
+)
 
 
 @callback
@@ -66,10 +99,64 @@ async def async_setup_entry(hass: HomeAssistant, entry: SubAcConfigEntry) -> boo
 
     st_entry.async_on_unload(_reload_on_core_unload)
 
+    async def _probe_ocf(call: ServiceCall) -> ServiceResponse:
+        """`execute` capability 로 OCF 리소스를 읽어본다 (조사용).
+
+        SmartThings 는 execute 명령의 결과를 곧바로 돌려주지 않고, 해당
+        컴포넌트의 `execute` capability 의 `data` 속성에 비동기로 채워 넣는다.
+        그래서 명령을 보낸 뒤 잠깐 기다렸다가 상태를 다시 읽어야 한다.
+        """
+        client = st_entry.runtime_data.client
+        device_id: str = call.data[ATTR_ST_DEVICE_ID]
+        href: str = call.data[ATTR_HREF]
+        component: str = call.data[ATTR_COMPONENT]
+
+        try:
+            await client.execute_device_command(
+                device_id,
+                Capability.EXECUTE,
+                Command.EXECUTE,
+                component,
+                argument=href,
+            )
+        except Exception as err:
+            raise HomeAssistantError(
+                f"execute 명령 실패 (href={href}, component={component}): {err}"
+            ) from err
+
+        await asyncio.sleep(call.data[ATTR_WAIT])
+
+        raw: dict[str, Any] = await client.get_raw_device_status(device_id)
+        components: dict[str, Any] = raw.get("components", {})
+        execute_data = (
+            components.get(component, {}).get("execute", {}).get("data", {})
+        )
+
+        result: dict[str, Any] = {
+            "href": href,
+            "component": component,
+            "execute_data": execute_data,
+            "components_present": sorted(components),
+        }
+        if call.data[ATTR_INCLUDE_RAW]:
+            result["raw"] = raw
+
+        _LOGGER.debug("probe_ocf %s [%s] -> %s", href, component, execute_data)
+        return result
+
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_PROBE_OCF,
+        _probe_ocf,
+        schema=PROBE_OCF_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: SubAcConfigEntry) -> bool:
     """Unload a config entry."""
+    hass.services.async_remove(DOMAIN, SERVICE_PROBE_OCF)
     return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
