@@ -71,23 +71,48 @@ st_data = st_entry.runtime_data      # SmartThingsData(devices, scenes, rooms, c
   통합 버그가 아니다
 - SmartThings 클라우드 반영 지연이 상당하다 (공식 앱도 동일)
 
-## OCF 리소스 조사 (`probe_ocf`)
+## 무풍(WindFree) 제어 조사 결과 — 실패 (기록용)
 
-미풍·무풍·청정은 SmartThings 표준 capability 밖에 있다. 앱은 `main` 에만
-존재하는 `execute` capability 로 OCF 리소스를 직접 조작하는 것으로 보인다.
-그 경로를 찾기 위한 조사용 서비스를 제공한다.
+미풍·무풍·청정은 SmartThings 표준 capability 밖에 있다. 알려진 경로를 전부
+실기기(FAC_BORA_17K, 2025 펌웨어)로 검증했고, **모두 실패했다.**
+
+| 시도 | 결과 |
+|---|---|
+| `custom.airConditionerOptionalMode` / `setAcOptionalMode ["windFree"]` | `NotValidValue` 거부 — profile 에 없는 capability 는 API 가 엄격히 검증 |
+| `execute ["mode/vs/0", {"x.com.samsung.da.options": ["Comode_WindFree"]}]` | 클라우드는 수락하지만 **기기가 반응하지 않음** |
+| 같은 형식, `mode/vs/1` | 동일 |
+| execute 로 리소스 읽기 (`/mode/vs/N`) | 결과가 status 에도, device event 로도 오지 않음 (전원 상태 무관) |
+
+결론: 이 기기의 최신 펌웨어에서는 **legacy OCF `execute` 브리지가 동작하지
+않는다.** 커뮤니티의 `Comode_WindFree` 성공 사례는 전부 2020~21년경 구형
+펌웨어 기기다. 공식 앱은 SmartThings 공개 API 가 아닌 자체 경로로 무풍을
+제어하는 것으로 보인다.
+
+**실용적 우회책:** SmartThings 앱에서 무풍 ON/OFF **장면(Scene)** 을 만들면
+코어 통합이 `scene.*` 엔티티로 가져온다. 실행만 가능하고 상태는 읽을 수 없다.
+
+## 조사용 서비스
+
+위 조사에 쓴 서비스 두 개를 남겨뒀다. 다른 모델(구형 펌웨어)에서는 execute
+경로가 살아 있을 수 있다.
 
 ```yaml
+# OCF 리소스 읽기 시도 (결과는 device event 로 수신)
 action: smartthings_subac.probe_ocf
 data:
-  st_device_id: C0972770-32BB-0000-0000-000000000000   # SmartThings deviceId
-  href: /oic/res                                       # 리소스 목록부터
-  component: main                                      # execute 를 가진 컴포넌트
-```
+  st_device_id: <SmartThings deviceId>
+  href: /mode/vs/0
+  component: main       # execute 를 가진 컴포넌트
 
-SmartThings 는 execute 결과를 즉시 돌려주지 않고 해당 컴포넌트의 `execute`
-capability 의 `data` 속성에 비동기로 채워 넣는다. 그래서 이 서비스는 명령을
-보낸 뒤 `wait` 초만큼 기다렸다가 상태를 다시 읽어 응답으로 돌려준다.
+# 임의 명령 전송 (검증 없이 그대로 전달, 실패해도 오류를 응답으로 반환)
+action: smartthings_subac.send_command
+data:
+  st_device_id: <SmartThings deviceId>
+  capability: execute
+  command: execute
+  component: main
+  arguments: ["mode/vs/0", {"x.com.samsung.da.options": ["Comode_WindFree"]}]
+```
 
 ## 설치
 
