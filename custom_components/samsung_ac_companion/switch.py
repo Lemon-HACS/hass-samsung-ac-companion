@@ -1,4 +1,9 @@
-"""로컬 API 기반 스위치 (무풍 / 자동청소건조 / 무드등)."""
+"""로컬 API 기반 스위치 (자동청소건조 / 무드등 / 바람문 / 청정 동시운전).
+
+무풍·운전기능·풍량·바람 방향은 climate 엔티티의 preset/fan/swing 으로
+옮겨갔다(`local_climate.py`). 여기 남은 것은 climate 로 표현할 수 없는
+기능들이다.
+"""
 
 from __future__ import annotations
 
@@ -13,6 +18,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from . import SubAcConfigEntry
 from .coordinator import LocalAcCoordinator
 from .entity import LocalAcEntity
+from .local_climate import CLEAN_SUFFIX, strip_clean
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -26,17 +32,6 @@ class LocalSwitchDescription(SwitchEntityDescription):
 
 
 SWITCHES: tuple[LocalSwitchDescription, ...] = (
-    LocalSwitchDescription(
-        key="windfree",
-        translation_key="windfree",
-        name="무풍",
-        icon="mdi:weather-windy",
-        prefix="Comode",
-        # Comode 슬롯은 정음/스피드와 공유한다. 무풍이 아닌 값이 들어있으면
-        # 이 스위치는 꺼진 것으로 보이고, 켜면 무풍으로 덮어쓴다.
-        on_value="Nano",
-        off_value="Off",
-    ),
     LocalSwitchDescription(
         key="autoclean",
         translation_key="autoclean",
@@ -77,9 +72,16 @@ async def async_setup_entry(
             entities.append(LocalAcSwitch(coordinator, device_id, description))
 
         # 바람문 상/중/하 (비트마스크). 이 옵션이 있는 유닛에만 만든다.
+        # climate 의 swing_mode 와 상태 공간은 같지만, 조합 목록에서 고르는
+        # 대신 한 곳만 여닫을 수 있어 조작 단위가 다르다.
         if LocalAcCoordinator.get_option(device, "Blooming") is not None:
             for bit, label in ((1, "상"), (2, "중"), (4, "하")):
                 entities.append(BloomingSwitch(coordinator, device_id, bit, label))
+
+        # 냉방/건조에 청정을 겹치는 기능. 기기가 조합 모드를 지원할 때만.
+        supported = device.get("Mode", {}).get("supportedModes", [])
+        if any(mode.endswith(CLEAN_SUFFIX) for mode in supported):
+            entities.append(CleanSwitch(coordinator, device_id))
 
     async_add_entities(entities)
 
@@ -185,4 +187,54 @@ class BloomingSwitch(LocalAcEntity, SwitchEntity):
         )
         await self.coordinator.async_send(
             self._device_id, "mode", {"options": [f"Blooming_{new_mask}"]}
+        )
+
+
+class CleanSwitch(LocalAcEntity, SwitchEntity):
+    """청정 동시운전 (`CoolClean` / `DryClean`).
+
+    SmartThings 클라우드에서 청정은 독립 모드(`wind`)라 냉방과 배타적이지만,
+    로컬 API 는 냉방·건조 위에 청정을 겹칠 수 있다. **클라우드로는 불가능한
+    조합이다.**
+    """
+
+    _attr_name = "청정 동시운전"
+    _attr_icon = "mdi:air-purifier"
+
+    def __init__(self, coordinator: LocalAcCoordinator, device_id: str) -> None:
+        """Initialize."""
+        super().__init__(coordinator, device_id, "clean")
+
+    @property
+    def _mode(self) -> str:
+        modes = self.device.get("Mode", {}).get("modes") or [""]
+        return modes[0]
+
+    @property
+    def is_on(self) -> bool:
+        """현재 모드에 청정이 겹쳐 있는지."""
+        return strip_clean(self._mode)[1]
+
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """현재 모드에 청정을 겹친다."""
+        base = strip_clean(self._mode)[0]
+        target = f"{base}{CLEAN_SUFFIX}"
+        if target not in self.device.get("Mode", {}).get("supportedModes", []):
+            raise HomeAssistantError(
+                f"현재 운전 모드에는 청정을 겹칠 수 없습니다 ({base}). "
+                "냉방이나 건조에서 사용하세요."
+            )
+        await self._set_mode(target)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """청정만 뗀다."""
+        base, clean = strip_clean(self._mode)
+        if not clean:
+            return
+        await self._set_mode(base)
+
+    async def _set_mode(self, mode: str) -> None:
+        self.coordinator.apply_optimistic_mode(self._device_id, mode)
+        await self.coordinator.async_send(
+            self._device_id, "mode", {"modes": [mode]}
         )

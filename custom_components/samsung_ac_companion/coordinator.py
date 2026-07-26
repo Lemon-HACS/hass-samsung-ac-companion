@@ -93,8 +93,19 @@ class LocalAcCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             raise UpdateFailed("기기 목록이 비어 있습니다")
         return devices
 
-    async def async_send(self, device_id: str, resource: str, payload: dict) -> None:
-        """명령을 보내고 즉시 상태를 갱신한다."""
+    async def async_send(
+        self,
+        device_id: str,
+        resource: str,
+        payload: dict,
+        *,
+        refresh: bool = True,
+    ) -> None:
+        """명령을 보내고 즉시 상태를 갱신한다.
+
+        여러 명령을 연달아 보낼 때는 마지막 것만 `refresh=True` 로 두면
+        중간 대기(각 2초)를 건너뛸 수 있다.
+        """
         context = await self._get_context()
         status, _, body = await local_api.raw_request(
             context,
@@ -107,6 +118,9 @@ class LocalAcCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         )
         if not 200 <= status < 300:
             raise RuntimeError(f"명령 실패 ({status}): {body.strip()}")
+
+        if not refresh:
+            return
 
         # 기기가 값을 보정하거나 아예 무시할 수 있으므로 실제 상태를 다시 읽는다.
         # 다만 곧바로 읽으면 아직 반영 전이라 낙관적 값이 옛 값으로 덮어써진다.
@@ -150,6 +164,36 @@ class LocalAcCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         if wind is None:
             return
         wind[key] = value
+        self.async_update_listeners()
+
+    @callback
+    def apply_optimistic_power(self, device_id: str, power: str) -> None:
+        """`Operation.power` 를 즉시 바꿔치기한다."""
+        device = (self.data or {}).get(device_id)
+        if not device or "Operation" not in device:
+            return
+        device["Operation"]["power"] = power
+        self.async_update_listeners()
+
+    @callback
+    def apply_optimistic_mode(self, device_id: str, mode: str) -> None:
+        """`Mode.modes` 를 즉시 바꿔치기한다."""
+        device = (self.data or {}).get(device_id)
+        if not device or "Mode" not in device:
+            return
+        device["Mode"]["modes"] = [mode]
+        self.async_update_listeners()
+
+    @callback
+    def apply_optimistic_temperature(self, device_id: str, desired: float) -> None:
+        """희망 온도를 즉시 바꿔치기한다."""
+        device = (self.data or {}).get(device_id)
+        if not device:
+            return
+        temperatures = device.get("Temperatures")
+        if not temperatures:
+            return
+        temperatures[0]["desired"] = desired
         self.async_update_listeners()
 
     @staticmethod

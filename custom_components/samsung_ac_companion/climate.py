@@ -1,7 +1,17 @@
-"""SmartThings 서브 컴포넌트용 climate 플랫폼.
+"""climate 플랫폼 — 클라우드 서브 컴포넌트 + 로컬 API 엔티티.
 
-코어의 `SmartThingsAirConditioner` 를 그대로 상속한다. 에어컨 제어 로직
-(모드 변환, 풍량, 온도, 프리셋)은 한 줄도 새로 구현하지 않는다.
+두 종류를 함께 만든다.
+
+1. `SubAirConditioner` — 코어가 무시하는 **서브 컴포넌트**(2 in 1 의 벽걸이)를
+   SmartThings 클라우드로 제어한다. 코어의 `SmartThingsAirConditioner` 를
+   그대로 상속하므로 제어 로직을 새로 구현하지 않는다.
+2. `LocalAirConditioner` — 두 유닛 모두를 **로컬 API** 로 제어한다. 무풍·미풍·
+   바람문처럼 클라우드에 아예 없는 것까지 다룬다. 자세한 배경은
+   `local_climate.py` 참고.
+
+둘은 같은 기기에 공존한다. 로컬이 끊겨도 클라우드 쪽은 살아 있다.
+
+아래는 1번에 대한 설명이다.
 
 코어 `SmartThingsEntity` 는 이미 `component` 인자를 받도록 되어 있고
 (`execute_device_command`, `get_attribute_value`, 이벤트 구독이 전부
@@ -16,6 +26,7 @@ import logging
 
 from pysmartthings import Capability, SmartThings
 
+from homeassistant.components.climate import ClimateEntity
 from homeassistant.components.smartthings import FullDevice
 from homeassistant.components.smartthings.climate import (
     AC_CAPABILITIES,
@@ -29,6 +40,7 @@ from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from . import SubAcConfigEntry
 from .const import HEAT_PUMP_COMPONENTS, ST_DOMAIN
+from .local_climate import LocalAirConditioner
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -52,10 +64,10 @@ async def async_setup_entry(
     entry: SubAcConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """에어컨 capability 를 갖춘 서브 컴포넌트를 찾아 엔티티로 추가한다."""
+    """서브 컴포넌트(클라우드)와 로컬 API 에어컨을 엔티티로 추가한다."""
     st_data = entry.runtime_data.st_entry.runtime_data
 
-    entities: list[SubAirConditioner] = []
+    entities: list[ClimateEntity] = []
     for device in st_data.devices.values():
         for component, status in device.status.items():
             if component == MAIN:
@@ -79,6 +91,17 @@ async def async_setup_entry(
             "기기가 2 in 1 이 아니거나 SmartThings 가 해당 컴포넌트를 "
             "노출하지 않는 경우입니다"
         )
+
+    # 로컬 API 가 설정되어 있으면 두 유닛 모두에 로컬 엔티티를 만든다.
+    # 위에서 만든 클라우드 엔티티와 같은 기기에 나란히 붙는다.
+    if (coordinator := entry.runtime_data.local_coordinator) is not None:
+        for device_id, device in coordinator.data.items():
+            if device.get("type") != "Air_Conditioner":
+                continue
+            _LOGGER.debug(
+                "로컬 에어컨 발견: %s (id=%s)", device.get("name"), device_id
+            )
+            entities.append(LocalAirConditioner(coordinator, device_id))
 
     async_add_entities(entities)
 

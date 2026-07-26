@@ -69,9 +69,10 @@ _LOGGER = logging.getLogger(__name__)
 PLATFORMS = [Platform.CLIMATE]
 
 # 로컬 API 가 설정되어 있을 때만 올리는 플랫폼.
+# CLIMATE 는 여기 없다 — 클라우드 서브 컴포넌트용으로 항상 올라가고,
+# 로컬 엔티티는 그 setup 안에서 코디네이터가 있을 때 함께 추가된다.
 LOCAL_PLATFORMS = [
     Platform.NUMBER,
-    Platform.SELECT,
     Platform.SENSOR,
     Platform.SWITCH,
 ]
