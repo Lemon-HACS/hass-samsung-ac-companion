@@ -235,7 +235,11 @@ class LocalAirConditioner(LocalAcEntity, ClimateEntity):
     async def _set_power(self, power: str, *, refresh: bool = True) -> None:
         self.coordinator.apply_optimistic_power(self._device_id, power)
         await self.coordinator.async_send(
-            self._device_id, "operation", {"power": power}, refresh=refresh
+            self._device_id,
+            "operation",
+            {"power": power},
+            refresh=refresh,
+            expect=lambda device: device.get("Operation", {}).get("power") == power,
         )
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
@@ -245,8 +249,9 @@ class LocalAirConditioner(LocalAcEntity, ClimateEntity):
             return
 
         # 꺼져 있으면 기기가 설정 명령을 무시하므로 먼저 켠다.
+        # 실제로 켜질 때까지 기다린다 — 곧바로 모드를 보내면 무시된다.
         if not self._is_on:
-            await self._set_power("On", refresh=False)
+            await self._set_power("On")
 
         target = HVAC_TO_LOCAL[hvac_mode]
         # 냉방+청정 상태에서 건조로 바꾸면 건조+청정을 유지한다.
@@ -257,7 +262,11 @@ class LocalAirConditioner(LocalAcEntity, ClimateEntity):
 
         self.coordinator.apply_optimistic_mode(self._device_id, target)
         await self.coordinator.async_send(
-            self._device_id, "mode", {"modes": [target]}
+            self._device_id,
+            "mode",
+            {"modes": [target]},
+            expect=lambda device: (device.get("Mode", {}).get("modes") or [None])[0]
+            == target,
         )
 
     async def async_set_temperature(self, **kwargs: Any) -> None:

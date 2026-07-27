@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import ssl
+from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
 
@@ -24,6 +25,12 @@ _LOGGER = logging.getLogger(__name__)
 # 명령을 보낸 뒤 기기가 반영할 때까지 기다리는 시간(초).
 # 이보다 빨리 읽으면 아직 옛 값이 돌아와 낙관적 반영이 지워진다.
 COMMAND_SETTLE_SECONDS = 2.0
+
+# 반영이 느린 명령을 위해 다시 읽어보는 횟수.
+# **전원은 기기가 상태를 바꾸기까지 5~6초가 걸린다**(실측). 한 번만 읽으면
+# 실제로는 켜졌는데도 "꺼짐"으로 확정해버려서, 사용자가 다시 누르고 그게
+# 토글이라 진짜로 꺼지는 일이 생긴다.
+COMMAND_VERIFY_ATTEMPTS = 5
 
 
 class LocalAcCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
@@ -100,11 +107,15 @@ class LocalAcCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         payload: dict,
         *,
         refresh: bool = True,
+        expect: Callable[[dict[str, Any]], bool] | None = None,
     ) -> None:
         """명령을 보내고 즉시 상태를 갱신한다.
 
         여러 명령을 연달아 보낼 때는 마지막 것만 `refresh=True` 로 두면
         중간 대기(각 2초)를 건너뛸 수 있다.
+
+        `expect` 를 주면 그 조건이 참이 될 때까지 다시 읽는다. 전원처럼
+        기기 반영이 느린 명령은 이것 없이는 아직 안 바뀐 옛 값을 확정해버린다.
         """
         context = await self._get_context()
         status, _, body = await local_api.raw_request(
@@ -125,8 +136,21 @@ class LocalAcCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         # 기기가 값을 보정하거나 아예 무시할 수 있으므로 실제 상태를 다시 읽는다.
         # 다만 곧바로 읽으면 아직 반영 전이라 낙관적 값이 옛 값으로 덮어써진다.
         # 기기가 반영할 시간을 준 뒤에 읽는다.
-        await asyncio.sleep(COMMAND_SETTLE_SECONDS)
-        await self.async_request_refresh()
+        for _ in range(COMMAND_VERIFY_ATTEMPTS):
+            await asyncio.sleep(COMMAND_SETTLE_SECONDS)
+            # async_request_refresh 는 debounce 되어 최대 10초를 더 기다린다.
+            # 명령 직후에는 곧바로 읽어야 한다.
+            await self.async_refresh()
+            if expect is None or expect(self.data.get(device_id, {})):
+                return
+
+        _LOGGER.warning(
+            "%s 명령이 %.0f초 안에 반영되지 않았습니다 (device=%s, payload=%s)",
+            resource,
+            COMMAND_SETTLE_SECONDS * COMMAND_VERIFY_ATTEMPTS,
+            device_id,
+            payload,
+        )
 
     @callback
     def apply_optimistic_option(
