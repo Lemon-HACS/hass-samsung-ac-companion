@@ -11,6 +11,7 @@ import json
 import logging
 import ssl
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
 
@@ -22,15 +23,31 @@ from .const import DEFAULT_LOCAL_SCAN_INTERVAL
 
 _LOGGER = logging.getLogger(__name__)
 
-# 명령을 보낸 뒤 기기가 반영할 때까지 기다리는 시간(초).
-# 이보다 빨리 읽으면 아직 옛 값이 돌아와 낙관적 반영이 지워진다.
+# 명령을 보낸 뒤 상태를 다시 읽기까지 기다리는 시간(초).
 COMMAND_SETTLE_SECONDS = 2.0
 
-# 반영이 느린 명령을 위해 다시 읽어보는 횟수.
-# **전원은 기기가 상태를 바꾸기까지 5~6초가 걸린다**(실측). 한 번만 읽으면
-# 실제로는 켜졌는데도 "꺼짐"으로 확정해버려서, 사용자가 다시 누르고 그게
-# 토글이라 진짜로 꺼지는 일이 생긴다.
-COMMAND_VERIFY_ATTEMPTS = 5
+# 기기가 명령을 따라올 때까지 지시한 값을 유지하는 최대 시간(초).
+#
+# 반영 시간이 들쭉날쭉하다 — 전원은 보통 5~6초지만 수십 초에서 몇 분까지
+# 늘어질 때가 있다. 그동안 폴링이 돌려주는 옛 값을 그대로 보여주면 화면이
+# "꺼짐"으로 되돌아가고, 안 켜진 줄 안 사용자가 다시 누르면 그게 토글이라
+# 이번에는 진짜로 꺼진다. 그래서 기기가 따라올 때까지는 지시한 값을 지킨다.
+#
+# 이 시간이 지나도 반영되지 않으면 기기가 거부한 것으로 보고 실제 값을 보여준다.
+PENDING_TIMEOUT_SECONDS = 180.0
+
+
+@dataclass
+class _Pending:
+    """기기가 아직 따라오지 못한 명령."""
+
+    apply: Callable[[dict[str, Any]], None]
+    """지시한 값을 폴링 결과 위에 다시 씌운다."""
+
+    reached: Callable[[dict[str, Any]], bool]
+    """기기가 목표에 도달했는지."""
+
+    expires_at: float
 
 
 class LocalAcCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
@@ -58,6 +75,8 @@ class LocalAcCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         # id 0 유닛의 uuid. SmartThings device_id 와 동일하며, 하위 유닛의
         # 기기 identifier 를 만들 때 기준이 된다.
         self.base_uuid: str | None = None
+        # 기기가 아직 따라오지 못한 명령. 폴링 결과 위에 다시 씌워진다.
+        self._pending: dict[str, _Pending] = {}
 
     async def _get_context(self) -> ssl.SSLContext:
         if self._ssl_context is None:
@@ -98,7 +117,43 @@ class LocalAcCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
 
         if not devices:
             raise UpdateFailed("기기 목록이 비어 있습니다")
+
+        self._merge_pending(devices)
         return devices
+
+    def _merge_pending(self, devices: dict[str, dict[str, Any]]) -> None:
+        """아직 반영되지 않은 명령을 폴링 결과 위에 다시 씌운다."""
+        now = self.hass.loop.time()
+        for key, pending in list(self._pending.items()):
+            device = devices.get(key.split(":", 1)[0])
+            if device is None:
+                continue
+            if pending.reached(device):
+                del self._pending[key]
+            elif now >= pending.expires_at:
+                # 기기가 끝내 받아들이지 않았다. 이제부터 실제 값을 보여준다.
+                del self._pending[key]
+                _LOGGER.warning("명령이 반영되지 않았습니다: %s", key)
+            else:
+                pending.apply(device)
+
+    @callback
+    def _optimistic(
+        self,
+        key: str,
+        device_id: str,
+        apply: Callable[[dict[str, Any]], None],
+        reached: Callable[[dict[str, Any]], bool],
+    ) -> None:
+        """지시한 값을 즉시 반영하고, 기기가 따라올 때까지 유지한다."""
+        device = (self.data or {}).get(device_id)
+        if device is None:
+            return
+        apply(device)
+        self._pending[key] = _Pending(
+            apply, reached, self.hass.loop.time() + PENDING_TIMEOUT_SECONDS
+        )
+        self.async_update_listeners()
 
     async def async_send(
         self,
@@ -107,15 +162,14 @@ class LocalAcCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
         payload: dict,
         *,
         refresh: bool = True,
-        expect: Callable[[dict[str, Any]], bool] | None = None,
     ) -> None:
-        """명령을 보내고 즉시 상태를 갱신한다.
+        """명령을 보내고 상태를 갱신한다.
 
         여러 명령을 연달아 보낼 때는 마지막 것만 `refresh=True` 로 두면
         중간 대기(각 2초)를 건너뛸 수 있다.
 
-        `expect` 를 주면 그 조건이 참이 될 때까지 다시 읽는다. 전원처럼
-        기기 반영이 느린 명령은 이것 없이는 아직 안 바뀐 옛 값을 확정해버린다.
+        기기가 늦게 따라와도 지시한 값은 `_merge_pending` 이 지켜주므로,
+        여기서는 한 번만 읽으면 된다.
         """
         context = await self._get_context()
         status, _, body = await local_api.raw_request(
@@ -134,91 +188,97 @@ class LocalAcCoordinator(DataUpdateCoordinator[dict[str, dict[str, Any]]]):
             return
 
         # 기기가 값을 보정하거나 아예 무시할 수 있으므로 실제 상태를 다시 읽는다.
-        # 다만 곧바로 읽으면 아직 반영 전이라 낙관적 값이 옛 값으로 덮어써진다.
-        # 기기가 반영할 시간을 준 뒤에 읽는다.
-        for _ in range(COMMAND_VERIFY_ATTEMPTS):
-            await asyncio.sleep(COMMAND_SETTLE_SECONDS)
-            # async_request_refresh 는 debounce 되어 최대 10초를 더 기다린다.
-            # 명령 직후에는 곧바로 읽어야 한다.
-            await self.async_refresh()
-            if expect is None or expect(self.data.get(device_id, {})):
-                return
-
-        _LOGGER.warning(
-            "%s 명령이 %.0f초 안에 반영되지 않았습니다 (device=%s, payload=%s)",
-            resource,
-            COMMAND_SETTLE_SECONDS * COMMAND_VERIFY_ATTEMPTS,
-            device_id,
-            payload,
-        )
+        await asyncio.sleep(COMMAND_SETTLE_SECONDS)
+        # async_request_refresh 는 debounce 되어 최대 10초를 더 기다린다.
+        # 명령 직후에는 곧바로 읽어야 한다.
+        await self.async_refresh()
 
     @callback
     def apply_optimistic_option(
         self, device_id: str, prefix: str, value: str
     ) -> None:
-        """`Mode.options` 값을 즉시 바꿔치기하고 리스너를 깨운다.
-
-        명령을 보내도 기기 반영과 다음 폴링까지 시간이 걸려서, 그동안 UI 가
-        예전 상태로 되돌아간 것처럼 보인다. 낙관적으로 먼저 반영해 두고
-        실제 값은 뒤이은 refresh 가 덮어쓴다.
-        """
-        device = (self.data or {}).get(device_id)
-        if not device:
-            return
-        options = device.get("Mode", {}).get("options")
-        if options is None:
-            return
-
+        """`Mode.options` 의 한 항목을 바꾼다."""
         target = f"{prefix}_{value}"
-        for index, option in enumerate(options):
-            if option.startswith(f"{prefix}_"):
-                options[index] = target
-                break
-        else:
+
+        def apply(device: dict[str, Any]) -> None:
+            options = device.get("Mode", {}).get("options")
+            if options is None:
+                return
+            for index, option in enumerate(options):
+                if option.startswith(f"{prefix}_"):
+                    options[index] = target
+                    return
             options.append(target)
-        self.async_update_listeners()
+
+        self._optimistic(
+            f"{device_id}:option:{prefix}",
+            device_id,
+            apply,
+            lambda device: self.get_option(device, prefix) == value,
+        )
 
     @callback
     def apply_optimistic_wind(self, device_id: str, key: str, value: Any) -> None:
-        """`Wind` 값을 즉시 바꿔치기하고 리스너를 깨운다."""
-        device = (self.data or {}).get(device_id)
-        if not device:
-            return
-        wind = device.get("Wind")
-        if wind is None:
-            return
-        wind[key] = value
-        self.async_update_listeners()
+        """`Wind` 의 한 필드를 바꾼다."""
+
+        def apply(device: dict[str, Any]) -> None:
+            wind = device.get("Wind")
+            if wind is not None:
+                wind[key] = value
+
+        self._optimistic(
+            f"{device_id}:wind:{key}",
+            device_id,
+            apply,
+            lambda device: device.get("Wind", {}).get(key) == value,
+        )
 
     @callback
     def apply_optimistic_power(self, device_id: str, power: str) -> None:
-        """`Operation.power` 를 즉시 바꿔치기한다."""
-        device = (self.data or {}).get(device_id)
-        if not device or "Operation" not in device:
-            return
-        device["Operation"]["power"] = power
-        self.async_update_listeners()
+        """전원을 바꾼다."""
+
+        def apply(device: dict[str, Any]) -> None:
+            if "Operation" in device:
+                device["Operation"]["power"] = power
+
+        self._optimistic(
+            f"{device_id}:power",
+            device_id,
+            apply,
+            lambda device: device.get("Operation", {}).get("power") == power,
+        )
 
     @callback
     def apply_optimistic_mode(self, device_id: str, mode: str) -> None:
-        """`Mode.modes` 를 즉시 바꿔치기한다."""
-        device = (self.data or {}).get(device_id)
-        if not device or "Mode" not in device:
-            return
-        device["Mode"]["modes"] = [mode]
-        self.async_update_listeners()
+        """운전 모드를 바꾼다."""
+
+        def apply(device: dict[str, Any]) -> None:
+            if "Mode" in device:
+                device["Mode"]["modes"] = [mode]
+
+        self._optimistic(
+            f"{device_id}:mode",
+            device_id,
+            apply,
+            lambda device: (device.get("Mode", {}).get("modes") or [None])[0] == mode,
+        )
 
     @callback
     def apply_optimistic_temperature(self, device_id: str, desired: float) -> None:
-        """희망 온도를 즉시 바꿔치기한다."""
-        device = (self.data or {}).get(device_id)
-        if not device:
-            return
-        temperatures = device.get("Temperatures")
-        if not temperatures:
-            return
-        temperatures[0]["desired"] = desired
-        self.async_update_listeners()
+        """희망 온도를 바꾼다."""
+
+        def apply(device: dict[str, Any]) -> None:
+            temperatures = device.get("Temperatures")
+            if temperatures:
+                temperatures[0]["desired"] = desired
+
+        self._optimistic(
+            f"{device_id}:temperature",
+            device_id,
+            apply,
+            lambda device: (device.get("Temperatures") or [{}])[0].get("desired")
+            == desired,
+        )
 
     @staticmethod
     def get_option(device: dict[str, Any], prefix: str) -> str | None:

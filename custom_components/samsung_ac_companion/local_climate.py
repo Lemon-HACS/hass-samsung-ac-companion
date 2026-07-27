@@ -235,11 +235,7 @@ class LocalAirConditioner(LocalAcEntity, ClimateEntity):
     async def _set_power(self, power: str, *, refresh: bool = True) -> None:
         self.coordinator.apply_optimistic_power(self._device_id, power)
         await self.coordinator.async_send(
-            self._device_id,
-            "operation",
-            {"power": power},
-            refresh=refresh,
-            expect=lambda device: device.get("Operation", {}).get("power") == power,
+            self._device_id, "operation", {"power": power}, refresh=refresh
         )
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
@@ -262,11 +258,7 @@ class LocalAirConditioner(LocalAcEntity, ClimateEntity):
 
         self.coordinator.apply_optimistic_mode(self._device_id, target)
         await self.coordinator.async_send(
-            self._device_id,
-            "mode",
-            {"modes": [target]},
-            expect=lambda device: (device.get("Mode", {}).get("modes") or [None])[0]
-            == target,
+            self._device_id, "mode", {"modes": [target]}
         )
 
     async def async_set_temperature(self, **kwargs: Any) -> None:
